@@ -1,0 +1,124 @@
+import CallsListUI
+import Recordings
+import AppKit
+import CallAudioAccess
+import CallAudioProbe
+import Composer
+import Lifecycle
+import MenuBar
+import PanelUI
+import Preferences
+import Reading
+import Recording
+import Session
+import os
+import SwiftUI
+
+@main
+struct AudelinApp: App {
+
+    @NSApplicationDelegateAdaptor(AudelinAppDelegate.self) private var appDelegate
+    @State private var model: AudelinMenu?
+    @State private var panel: FloatingPanel?
+    @State private var callsWindow: CallsWindow?
+
+    @MainActor
+    private func start() async {
+
+        guard model == nil else { return }
+        let panel = FloatingPanel.onScreen()
+        self.panel = panel
+        let callsWindow = CallsWindow(makeWindow: {
+            NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 560),
+                     styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        }, activate: { NSApplication.shared.activate() })
+        self.callsWindow = callsWindow
+        let boundary = await makeRealBoundary()
+        let model = await compose(
+            boundary: boundary,
+            preferencesURL: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".audelin/preferences.json"),
+            openCallsFolder: { NSWorkspace.shared.open($0) }, presentCalls: { callsWindow.show() },
+            openURL: { NSWorkspace.shared.open($0) },
+            presentPanel: { [weak panel] in panel?.setVisible($0) },
+            terminate: { await MainActor.run { NSApplication.shared.terminate(nil) } }
+        )
+        self.model = model
+        if let calls = model.calls { callsWindow.install(content: NSHostingView(rootView: CallsContent(model: calls))) }
+        panel.install(model)
+        appDelegate.connect(model)
+    }
+
+    init() {
+        Logger(subsystem: "dev.igor1309.audelin", category: "menu").notice("app launched")
+    }
+
+    var body: some Scene {
+        MenuBarExtra {
+            if let model {
+                ForEach(Array(model.menu.entries.enumerated()), id: \.offset) { _, entry in
+                    switch entry {
+                    case let .stateLine(line):
+                        Text(line)
+                        Divider()
+                    case let .button(title, action):
+                        Button(title) { Task { await model.perform(action) } }
+                            .keyboardShortcut(action == .quit ? KeyboardShortcut("q") : nil)
+                    case let .toggle(title, checked, action):
+                        Toggle(title, isOn: Binding(
+                            get: { checked }, set: { _ in Task { await model.perform(action) } }
+                        ))
+                    }
+                }
+                .disabled(model.quitting)
+            }
+        } label: {
+            // Icon only: titles of different widths shifted the icon (LAB-640).
+            Image(nsImage: menuBarImage)
+                .accessibilityLabel(model?.menu.item.title ?? "Audelin")
+                .task { await start() }
+        }
+    }
+
+    private var menuBarImage: NSImage {
+
+        guard let item = model?.menu.item else {
+            return NSImage(systemSymbolName: "waveform", accessibilityDescription: "Audelin") ?? NSImage()
+        }
+        let image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.title)?
+            .withSymbolConfiguration(.init(paletteColors: [item.isRed ? .systemRed : .labelColor]))
+            ?? NSImage()
+        // Template status images discard their palette in the menu bar.
+        image.isTemplate = !item.isRed
+        return image
+    }
+}
+
+@MainActor
+final class AudelinAppDelegate: NSObject, NSApplicationDelegate {
+
+    /// Unset while the app starts: a reopen then is the launch itself, and
+    /// recording's state is not known yet to choose a window.
+    var reopen: (() -> Void)?
+
+    func connect(_ menu: AudelinMenu) {
+
+        reopen = { [weak menu] in menu?.appReopened() }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+
+        handleReopen()
+        return true
+    }
+
+    /// Tests call this: touching `NSApplication.shared` there takes seconds on CI
+    /// and holds the main actor.
+    func handleReopen() { reopen?() }
+}
+
+private struct CallsContent: View {
+    let model: AudelinCalls
+    var body: some View {
+        CallsListView(state: model.state, event: { event in Task { await model.send(event) } })
+    }
+}

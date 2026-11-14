@@ -12,10 +12,10 @@ actor RecordingSessions: RecordingSession {
 
         let session: Task<SessionInputs, Never>
         let subscription: Task<Void, Never>
+        let pieces: SessionPieces
         // Each send waits for the one before it, so Session sees them in the order they were made.
         var sends: Task<Void, Never>?
         var observation: Task<Void, Never>?
-        var reading: ReadingSubscription?
         var first: RecordingSessionReport?
         var beginners: [CheckedContinuation<RecordingSessionReport, Never>] = []
         var enders: [CheckedContinuation<Void, Never>] = []
@@ -40,15 +40,16 @@ actor RecordingSessions: RecordingSession {
     private var endedBeforeBegin: Set<UInt64> = []
 
     init(
-        preferences: PreferencesStore, callApp: RecordingCallApp, processes: CoreAudioProcesses,
+        preferences: PreferencesStore, occupiedCallNames: @escaping @Sendable () throws -> [String],
+        callApp: RecordingCallApp, processes: CoreAudioProcesses,
         boundary: ComposerBoundary,
         report: @escaping @Sendable (UInt64, RecordingSessionReport) async -> Void,
-        panel: AudelinPanel
+        panel: AudelinPanel, cleanupRuns: CleanupRuns, summaries: SummaryCallbacks = .disabled
     ) {
         self.timeZone = boundary.time.timeZone
         self.panel = panel
-        self.makePieces = composeRecordingPieces(preferences: preferences, callApp: callApp,
-                                                 processes: processes, boundary: boundary)
+        self.makePieces = composeRecordingPieces(preferences: preferences, occupiedCallNames: occupiedCallNames, callApp: callApp,
+                                                 processes: processes, boundary: boundary, cleanupRuns: cleanupRuns, summaries: summaries)
         self.liveText = { preferences.read().liveText }
         self.report = report
         self.sink = boundary.log
@@ -66,15 +67,14 @@ actor RecordingSessions: RecordingSession {
                 let forwarding = subscribe(pieces, to: await session.value)
                 await withTaskCancellationHandler { await forwarding.value } onCancel: { forwarding.cancel() }
             }
-            running[id] = Running(session: session, subscription: subscription)
+            running[id] = Running(session: session, subscription: subscription, pieces: pieces)
             running[id]?.observation = Task {
                 // Register before begin so even a short-lived state is retained.
                 let states = await session.value.states()
-                let text = await pieces.readingText()
-                let reading = await self.panel.begin(id: id, text: text, enableLiveText: {
+                let feed = await pieces.readingText()
+                let reading = await self.panel.begin(id: id, text: feed.text, speakers: feed.speakers, enableLiveText: {
                     await self.send(.liveTextChanged(true), id: id)?.value
                 })
-                self.running[id]?.reading = reading
                 self.start(id: id, liveText: enabled)
                 var previous: ObservedSession?
                 for await state in states {
@@ -164,10 +164,11 @@ actor RecordingSessions: RecordingSession {
                 deliver(.ended, id: id, entry: &entry)
             }
             let subscription = entry.subscription, observation = entry.observation, session = entry.session
-            let sends = entry.sends, reading = entry.reading
+            let sends = entry.sends, pieces = entry.pieces
             Task {
+                // The session has sent all it will; a feed whose transcript never opened ends here too.
+                await pieces.finishReading()
                 await self.panel.end(id: id)
-                await reading?.end()
                 subscription.cancel()
                 await subscription.value
                 await sends?.value

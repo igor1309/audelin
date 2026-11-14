@@ -4,7 +4,6 @@ import Foundation
 import Preferences
 import Testing
 
-@MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct PreferencesCompositionTests {
     @Test(arguments: [false, true])
@@ -18,7 +17,7 @@ struct PreferencesCompositionTests {
             let changed = try await rig.state { $0.automatic == !automatic }
             #expect(changed.phase == .idle)
             let url = rig.root.appendingPathComponent("preferences.json")
-            #expect(await offPool { PreferencesStore(fileURL: url).read().automaticRecording } == !automatic)
+            #expect(PreferencesStore(fileURL: url).read().automaticRecording == !automatic)
         }
     }
 

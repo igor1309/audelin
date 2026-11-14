@@ -1,21 +1,28 @@
 import AVFoundation
 import CallAudioAccess
+import CallDiarizer
 import Composer
 import struct CoreAudioProcessBinding.CoreAudioBinding
 import protocol CoreAudioProcesses.CallClock
 import struct CoreAudioProcesses.ContinuousCallClock
 import Foundation
+import FluidAudio
 import LiveText
 import ParakeetRecognizer
 
 func makeRealBoundary() async -> ComposerBoundary {
     let access = await makeCallAudioAccess()
+    let recognizers = RealRecognizerSource(log: SystemLogSink())
     return ComposerBoundary(
         capturePersistence: .recorded,
-        microphone: RealMicrophone(), callAudio: RealCallAudio(), recognizers: RealRecognizerSource(log: SystemLogSink()),
+        microphone: RealMicrophone(), callAudio: RealCallAudio(), recognizers: recognizers,
         processes: RealProcessSource(), access: RealCallAudioAccess(policy: access),
         microphonePermission: SystemMicrophonePermission(), capacity: DiskCapacity(), time: RealClock(), log: SystemLogSink(), intervals: .systemIntervals,
-        recordings: FileRecordingStorage()
+        recordings: FileRecordingStorage(), trash: ComposerBoundary.systemTrash, bleedCleaning: LocalVqeCleaning(makeManager: { try await LocalVqeManager() }, process: { manager, microphone, call in
+            try await manager.process(micURL: microphone, referenceURL: call)
+        }), bleedHearing: CleanupHearing(recognizers: recognizers),
+        transcripts: FileTranscriptStorage(diarizer: CallDiarizer(binding: FluidDiarizationBinding())),
+        browser: openBrowserChannel
     )
 }
 
@@ -59,11 +66,11 @@ struct RealCallAudio: CallAudioSource {
 struct RealRecognizerSource: RecognizerSource {
     let log: any LogSink
     func recognizer(for side: ComposerSide) async throws -> any SpeechRecognizer {
-        RealRecognizer(base: try await ParakeetRecognizer())
+        RealRecognizer(base: try await ParakeetRecognizer(readers: .shared))
     }
     func missingModels() -> [String] { ParakeetRecognizer.missingModels(in: ParakeetRecognizer.modelsDirectory) }
     func startLoading() -> Task<Void, any Error> {
-        loadModel(recognizerSource: { try await ParakeetRecognizer() }, sink: log)
+        loadModel(recognizerSource: { try await ParakeetRecognizer(readers: .shared) }, sink: log)
     }
 
 }
@@ -79,7 +86,7 @@ struct DiskCapacity: FolderCapacity {
 }
 
 struct RealProcessSource: CallProcessSource {
-    private let binding = CoreAudioBinding()
+    private let binding = CoreAudioBinding(native: .system)
     func processObjects() throws -> [UInt32] { try binding.processObjects() }
     func pid(of object: UInt32) -> Int32? { binding.pid(of: object) }
     func bundleID(of object: UInt32) -> String? { binding.bundleID(of: object) }
@@ -108,7 +115,7 @@ struct RealRecognizer: SpeechRecognizer {
 }
 
 func realTime(
-    callClock: any CallClock = ContinuousCallClock(),
+    callClock: any CallClock = ContinuousCallClock(now: { ContinuousClock.now }, sleep: { try await Task.sleep(until: $0, clock: .continuous) }),
     sleepUntil: @escaping @Sendable (ContinuousClock.Instant) async throws -> Void = { try await ContinuousClock().sleep(until: $0) }
 ) -> ComposerTime {
     ComposerTime(now: { Date() }, timeZone: { .current },

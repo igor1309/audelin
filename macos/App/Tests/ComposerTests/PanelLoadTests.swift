@@ -92,7 +92,7 @@ struct PanelLoadTests {
         // The call is already there: only the states after it are the cost of a late state.
         reading = ReadingReducer.reduce(reading, .textUpdated(readingText(feed[0]))).0
         var rows = MappedRows()
-        var shown = panelState(reading, rows: &rows)
+        var shown = panelState(russianPanel, reading, rows: &rows)
         var mapped = feed[0].finalCount
         for state in feed.dropFirst() {
             var times = [Duration](repeating: .zero, count: 5)
@@ -103,7 +103,7 @@ struct PanelLoadTests {
             times[1] += clock.measure { reading = ReadingReducer.reduce(reading, .textUpdated(update!)).0 }
             times[2] += clock.measure { _ = reading == previous }
             var next: PanelState?
-            times[3] += clock.measure { next = panelState(reading, rows: &rows) }
+            times[3] += clock.measure { next = panelState(russianPanel, reading, rows: &rows) }
             times[4] += clock.measure { _ = next == shown }
             shown = next!
             states.append(times)
@@ -113,20 +113,20 @@ struct PanelLoadTests {
 
     /// States that each carry the whole call's `entries` with its last one
     /// growing and all before it final, as both sides speaking gives.
-    private func feed(entries count: Int) -> [State] {
+    private func feed(entries count: Int) -> [CallState] {
 
         let words = String(repeating: "word ", count: 20)
-        var history: [State.Entry] = []
+        var history: [CallState.Entry] = []
         for index in 0..<count - 1 {
             let begins = Double(index) * 6
-            let text = Text(id: index / 2, start: begins, end: begins + 5, settled: words, pending: "")
-            history.append(State.Entry(speaker: index % 2 == 0 ? .mine : .theirs, text: text, writtenLater: false))
+            let text = TranscriptSegment(id: index / 2, start: begins, end: begins + 5, words: words.split(separator: " ").map { .init(String($0), start: begins, end: begins + 5) }, settledCount: words.split(separator: " ").count)
+            history.append(CallState.Entry(speaker: index % 2 == 0 ? .mine : .theirs, text: text, writtenLater: false))
         }
         let start = Double(count) * 6
-        var feed: [State] = []
+        var feed: [CallState] = []
         for step in 0..<Self.states {
-            let text = Text(id: count, start: start, end: start + Double(step) / Self.todaysRate, settled: "", pending: "w\(step)")
-            var state = State(status: .listening, entries: history + [State.Entry(speaker: .mine, text: text, writtenLater: false)])
+            let text = TranscriptSegment(id: count, start: start, end: start + Double(step) / Self.todaysRate, words: [.init("w\(step)", start: start, end: start + Double(step) / Self.todaysRate)], settledCount: 0)
+            var state = CallState(status: .listening, entries: history + [CallState.Entry(speaker: .mine, text: text, writtenLater: false)])
             state.finalCount = history.count
             feed.append(state)
         }

@@ -4,46 +4,49 @@ import SwiftUI
 /// The Settings window's content: one page of labelled rows.
 ///
 /// Renders the state it is given and reports what the user does; it holds no
-/// state of its own.
+/// domain state of its own; disclosure expansion is local presentation state.
 public struct SettingsView: View {
 
-    private let state: SettingsState
-    private let event: (SettingsEvent) -> Void
-    private let config: SettingsConfig
+    let state: SettingsState
+    let event: (SettingsEvent) -> Void
+    let config: SettingsConfig
+    let text: SettingsText
+    var scrolls = false
+    var contentHeightChanged: (CGFloat) -> Void = { _ in }
+    @State var notesDetailsExpanded = false
+    @State var tabsHeight: CGFloat = 0
+    @State var pageHeight: CGFloat = 0
 
     @Environment(\.colorScheme) private var scheme
 
     public init(
         state: SettingsState,
         event: @escaping (SettingsEvent) -> Void,
-        config: SettingsConfig = .glassLedger
+        config: SettingsConfig = .glassLedger,
+        text: SettingsText = .init(language: .russian)
     ) {
         self.state = state
         self.event = event
         self.config = config
+        self.text = text
     }
 
     public var body: some View {
+        if scrolls { scrollingBody } else { fullPageBody }
+    }
 
-        VStack(alignment: .leading, spacing: tokens.space24) {
+    private var fullPageBody: some View {
 
-            row("Запись") { recording }
-            row("Папка данных") { folder }
-            row("Финальная расшифровка") { engines }
-            row("Аудио") { audio }
-            row("Объяснить термин") { explain }
-
-            if let chunk = state.chunk {
-
-                row("Размер фрагмента") { chunkPicker(chunk) }
-            }
+        VStack(alignment: .leading, spacing: tokens.space16) {
+            tabs
+            page
         }
         .padding(tokens.space24)
         .frame(width: config.windowWidth, alignment: .topLeading)
         .background(tokens.win)
         .overlay(alignment: .top) {
 
-            if let confirm = state.moveConfirm {
+            if state.selectedTab == .recording, let confirm = state.moveConfirm {
 
                 moveSheet(confirm)
             }
@@ -51,7 +54,92 @@ public struct SettingsView: View {
     }
 }
 
-private extension SettingsView {
+extension SettingsView {
+
+    @ViewBuilder
+    var page: some View {
+        switch state.selectedTab {
+        case .general: generalPage
+        case .recording: recordingPage
+        case .callNotes: callNotesPage
+        }
+    }
+
+    var generalPage: some View {
+        VStack(alignment: .leading, spacing: tokens.space24) {
+
+            row(text(.languageRow)) { segmented(state.general.language, id: "language") { event(.selectLanguage($0)) } }
+            row(text(.appearanceRow)) { segmented(state.general.appearance, id: "appearance") { event(.selectAppearance($0)) } }
+        }
+    }
+
+    /// Equal segments across the row; the selected one is raised on the track.
+    @ViewBuilder
+    func segmented<ID>(_ control: SettingsState.Segmented<ID>, id: String, select: @escaping (ID) -> Void) -> some View {
+
+        HStack(spacing: tokens.space2) {
+
+            ForEach(control.segments, id: \.id) { segment in
+
+                let isSelected = segment.id == control.selected
+
+                uiText(segment.title, tokens.typeSmall, isSelected ? tokens.text : tokens.sub, isSelected ? .semibold : .regular)
+                    .padding(.vertical, tokens.space4)
+                    .padding(.horizontal, tokens.space12)
+                    .frame(maxWidth: .infinity)
+                    .background {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: tokens.radiusControl)
+                                .fill(tokens.surface)
+                                .strokeBorder(tokens.rule, lineWidth: 1)
+                        }
+                    }
+            }
+        }
+        .padding(tokens.space2)
+        .background(tokens.btn, in: .rect(cornerRadius: tokens.radiusControl))
+        .accessibilityHidden(true)
+        .overlay {
+            SettingsSegmentsTarget(
+                titles: control.segments.map(\.title), enabled: control.segments.map(\.isEnabled),
+                selected: control.segments.firstIndex { $0.id == control.selected }, identifier: id,
+                segmentIdentifiers: control.segments.map { "\(id)-\($0.id)" },
+                select: { select(control.segments[$0].id) })
+        }
+
+        uiText(control.hint, tokens.typeSmall, tokens.gutter)
+    }
+
+    var recordingPage: some View {
+        VStack(alignment: .leading, spacing: tokens.space24) {
+
+            row(text(.recordingRow)) { recording }
+            row(text(.folderRow)) { folder }
+            row(text(.engineRow)) { engines }
+            row(text(.audioRow)) { audio }
+            row(text(.explainRow)) { explain }
+
+            if let chunk = state.chunk {
+
+                row(text(.chunkRow)) { chunkPicker(chunk) }
+            }
+        }
+    }
+
+    var tabs: some View {
+        HStack(spacing: tokens.space4) {
+            tab(text(.generalTab), .general)
+            tab(text(.recordingTab), .recording)
+            tab(text(.callNotesTab), .callNotes)
+        }
+    }
+
+    func tab(_ title: String, _ tab: SettingsState.Tab) -> some View {
+        button(title, state.selectedTab == tab ? .primary : .secondary, fill: true, id: "tab-\(tab.rawValue)", selected: state.selectedTab == tab) {
+            event(.selectTab(tab))
+        }
+        .accessibilityIdentifier("tab-\(tab.rawValue)")
+    }
 
     var tokens: GlassLedger { config.tokens(for: scheme) }
 
@@ -101,24 +189,24 @@ private extension SettingsView {
 
 // MARK: - Rows
 
-private extension SettingsView {
+extension SettingsView {
 
     @ViewBuilder
     var recording: some View {
 
-        checkbox("Записывать звонки автоматически", isOn: state.recordsCalls) {
+        checkbox(text(.recordsCalls), isOn: state.recordsCalls) {
             event(.setRecordsCalls($0))
         }
         uiText(
-            "Запись начинается, когда Zoom, Телемост или браузер берёт микрофон, и останавливается, когда звонок закончился.",
+            text(.recordsCallsNote),
             tokens.typeSmall,
             tokens.gutter
         )
-        checkbox("Живой текст", isOn: state.liveText) {
+        checkbox(text(.liveText), isOn: state.liveText) {
             event(.setLiveText($0))
         }
         uiText(
-            "Выключен — звонок только записывается. Включить можно и во время звонка: начало допишется из записи.",
+            text(.liveTextNote),
             tokens.typeSmall,
             tokens.gutter
         )
@@ -143,7 +231,7 @@ private extension SettingsView {
                         .strokeBorder(tokens.rule, lineWidth: 1)
                 )
 
-            button("Изменить…", .secondary, isEnabled: status.allowsChange) {
+            button(text(.changeFolder), .secondary, isEnabled: status.allowsChange) {
                 event(.changeFolder)
             }
         }
@@ -151,7 +239,7 @@ private extension SettingsView {
         switch status {
         case let .idle(calls):
             dataText(
-                "\(calls) (≈55 MB в час) · настройки и журналы — в ~/.audelin",
+                text(.folderIdle, calls),
                 tokens.typeSmall,
                 tokens.gutter
             )
@@ -164,12 +252,18 @@ private extension SettingsView {
             }
 
         case let .failed(moved, reason):
-            dataText("часть звонков ещё здесь", tokens.typeSmall, tokens.warn)
+            dataText(text(.folderPartlyHere), tokens.typeSmall, tokens.warn)
             errorBanner(moved, reason)
-            button("Повторить", .secondary) { event(.retryMove) }
+            HStack(spacing: tokens.space8) {
+                button(text(.retry), .secondary) { event(.retryMove) }
+                button(text(.cancel), .secondary) { event(.cancelMove) }
+            }
 
         case .recording:
-            dataText("идёт запись — папку можно сменить после звонка", tokens.typeSmall, tokens.warn)
+            dataText(text(.folderRecording), tokens.typeSmall, tokens.warn)
+
+        case let .pickerFailed(reason):
+            errorBanner(text(.pickerFailed), reason)
         }
     }
 
@@ -184,7 +278,7 @@ private extension SettingsView {
     var audio: some View {
 
         uiText(
-            "Хранится 7 дней после звонка, потом удаляется — только после проверки текста. Закреплённый звонок хранит аудио, пока не открепите. Текст не удаляется.",
+            text(.audioNote),
             tokens.typeBody,
             tokens.text
         )
@@ -203,7 +297,7 @@ private extension SettingsView {
                         .strokeBorder(tokens.rule, lineWidth: 1)
                 )
 
-            dataText("выделение → новый тред в bb", tokens.typeSmall, tokens.gutter)
+            dataText(text(.explainNote), tokens.typeSmall, tokens.gutter)
         }
     }
 
@@ -220,7 +314,7 @@ private extension SettingsView {
 
                     Button { event(.selectChunk(seconds)) } label: {
 
-                        dataText("\(seconds) с", tokens.typeSmall, isSelected ? tokens.selText : tokens.text)
+                        dataText(text(.chunkSeconds, seconds), tokens.typeSmall, isSelected ? tokens.selText : tokens.text)
                             .padding(.vertical, tokens.space4)
                             .padding(.horizontal, tokens.space12)
                             .background(
@@ -241,7 +335,7 @@ private extension SettingsView {
         }
 
         dataText(
-            "Только в debug-сборке. В релизе — \(chunk.releaseDefault) с.",
+            text(.chunkNote, chunk.releaseDefault),
             tokens.typeSmall,
             tokens.gutter
         )
@@ -250,41 +344,47 @@ private extension SettingsView {
 
 // MARK: - Controls
 
-private extension SettingsView {
+extension SettingsView {
 
     func checkbox(
         _ label: String,
         isOn: Bool,
+        id: String? = nil,
         set: @escaping (Bool) -> Void
     ) -> some View {
 
-        Button { set(!isOn) } label: {
+        let content = HStack(spacing: tokens.space8) {
 
-            HStack(spacing: tokens.space8) {
+            ZStack {
 
-                ZStack {
+                RoundedRectangle(cornerRadius: tokens.radiusBar)
+                    .fill(isOn ? tokens.selBg : tokens.surface)
+
+                if isOn {
+
+                    Text("✓")
+                        .font(tokens.ui(tokens.typeSmall, .semibold))
+                        .foregroundStyle(tokens.selText)
+                } else {
 
                     RoundedRectangle(cornerRadius: tokens.radiusBar)
-                        .fill(isOn ? tokens.selBg : tokens.surface)
-
-                    if isOn {
-
-                        Text("✓")
-                            .font(tokens.ui(tokens.typeSmall, .semibold))
-                            .foregroundStyle(tokens.selText)
-                    } else {
-
-                        RoundedRectangle(cornerRadius: tokens.radiusBar)
-                            .strokeBorder(tokens.sub, lineWidth: 1)
-                    }
+                        .strokeBorder(tokens.sub, lineWidth: 1)
                 }
-                .frame(width: 16, height: 16)
-
-                uiText(label, tokens.typeBody, tokens.text)
             }
-            .contentShape(.rect)
+            .frame(width: 16, height: 16)
+
+            uiText(label, tokens.typeBody, tokens.text)
         }
-        .buttonStyle(.plain)
+        return Group {
+            if let id {
+                content.accessibilityHidden(true).overlay {
+                    SettingsPressTarget(title: label, identifier: id, isEnabled: true, checked: isOn) { set(!isOn) }
+                }
+            } else {
+                Button { set(!isOn) } label: { content.contentShape(.rect) }
+                    .buttonStyle(.plain)
+            }
+        }
     }
 
     enum ButtonKind { case primary, secondary }
@@ -294,6 +394,8 @@ private extension SettingsView {
         _ kind: ButtonKind,
         isEnabled: Bool = true,
         fill: Bool = false,
+        id: String? = nil,
+        selected: Bool? = nil,
         action: @escaping () -> Void
     ) -> some View {
 
@@ -303,16 +405,22 @@ private extension SettingsView {
         case (.secondary, true): (tokens.btn, tokens.text)
         }
 
-        return Button(action: action) {
-
-            uiText(label, tokens.typeSmall, colors.1, .semibold)
-                .padding(.vertical, tokens.space6)
-                .padding(.horizontal, tokens.space16)
-                .frame(maxWidth: fill ? .infinity : nil)
-                .background(colors.0, in: .rect(cornerRadius: tokens.radiusControl))
+        let content = uiText(label, tokens.typeSmall, colors.1, .semibold)
+            .padding(.vertical, tokens.space6)
+            .padding(.horizontal, tokens.space16)
+            .frame(maxWidth: fill ? .infinity : nil)
+            .background(colors.0, in: .rect(cornerRadius: tokens.radiusControl))
+        return Group {
+            if let id {
+                content.accessibilityHidden(true).overlay {
+                    SettingsPressTarget(title: label, identifier: id, isEnabled: isEnabled, selected: selected, action: action)
+                }
+            } else {
+                Button(action: action) { content }
+                    .buttonStyle(.plain)
+                    .disabled(!isEnabled)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
     }
 
     func option(_ engine: SettingsState.Engine, isSelected: Bool) -> some View {
@@ -389,8 +497,8 @@ private extension SettingsView {
 
             VStack(spacing: tokens.space8) {
 
-                button("Перенести", .primary, fill: true) { event(.confirmMove) }
-                button("Отмена", .secondary, fill: true) { event(.cancelMove) }
+                button(text(.confirmMove), .primary, fill: true) { event(.confirmMove) }
+                button(text(.cancel), .secondary, fill: true) { event(.cancelMove) }
             }
         }
         .padding(tokens.space24)
@@ -409,6 +517,9 @@ private extension SettingsState.Folder.Status {
 
     var allowsChange: Bool {
 
-        if case .idle = self { true } else { false }
+        switch self {
+        case .idle, .pickerFailed: true
+        case .moving, .failed, .recording: false
+        }
     }
 }

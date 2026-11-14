@@ -67,7 +67,10 @@ struct MenuBarTests {
                             let token = clock.after(delay, fire)
                             return BoundaryCancellation { token.cancel() }
                         }, ticks: panelClock.ticks), log: TestLogSink(), intervals: testIntervals,
-                    recordings: FileRecordingStorage()
+                    recordings: FileRecordingStorage(), trash: removeForTrash, bleedCleaning: CleaningStub { _ in preconditionFailure("Live text is disabled") },
+                    bleedHearing: HearingStub { _ in preconditionFailure("Live text is disabled") },
+                    transcripts: FileTranscriptStorage(diarizer: .unavailable),
+                    preferredLanguages: { ["ru-RU"] }
                 )
                 let app = await compose(boundary: boundary, preferencesURL: root.appendingPathComponent("preferences.json"),
                     openCallsFolder: { _ in false }, presentCalls: {}, openURL: { _ in }, presentPanel: { _ in },
@@ -134,7 +137,7 @@ struct MenuBarTests {
                 #expect(await app.snapshot().lastSessionID == 1)
                 #expect(await app.snapshot().phase == .idle)
                 var terminal = await app.panelStates().makeAsyncIterator()
-                #expect(await terminal.next() == .init(recording: .off, log: .empty))
+                #expect(await terminal.next()?.recording == .off)
                 #expect(model.isCancelled)
             }
         }

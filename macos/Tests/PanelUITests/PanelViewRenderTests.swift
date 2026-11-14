@@ -66,16 +66,39 @@ struct PanelViewRenderTests {
         #expect(long.frame.width == short.frame.width)
     }
 
-    @Test(arguments: [ColorScheme.light, .dark])
-    func rendersEveryPreviewState(scheme: ColorScheme) throws {
+    @Test(arguments: [ColorScheme.light, .dark], [PanelState.oneRemoteSpeaker, .twoRemoteSpeakers, .severalRemoteSpeakers])
+    func eachRemoteSpeakerIsDrawnInItsOwnColour(scheme: ColorScheme, state: PanelState) throws {
+
+        let tokens = PanelConfig.glassLedger.tokens(for: scheme)
+        let host = Offscreen.host(PanelPreview(state: state, scheme: scheme), scheme: scheme)
+        let text = try #require(Offscreen.textView(in: host)?.textStorage)
+        let string = text.string as NSString
+        func colour(of substring: String) throws -> NSColor? {
+            let range = string.range(of: substring)
+            try #require(range.location != NSNotFound, "«\(substring)» is not shown")
+            return (text.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+        }
+        for entry in state.shownEntries {
+            let expected = NSColor(entry.speaker == .me ? tokens.me : tokens.remoteSpeaker(entry.remoteSpeaker)).usingColorSpace(.sRGB)
+            #expect(try colour(of: "\t" + entry.time + "\t") == expected, "\(entry.time)")
+            if let label = entry.label {
+                #expect(try colour(of: "\t" + label) == expected, "\(label)")
+            }
+        }
+    }
+
+    @Test(arguments: [ColorScheme.light, .dark], PanelLanguage.allCases)
+    func rendersEveryPreviewState(scheme: ColorScheme, language: PanelLanguage) throws {
+
+        let panelText = PanelText(language: language)
 
         let holds = [PanelState.Held(entryID: 3, text: "Первый фрагмент"), .init(entryID: 4, text: "Second selection")]
         let preparing = (0...holds.count).map { count in
             (name: "preparing-\(count)-holds", state: PanelState(recording: .on(elapsed: "00:00:12"), log: .preparing(holds: Array(holds.prefix(count)))))
         }
-        for (name, state) in PanelState.previews + preparing {
+        for (name, state) in PanelState.previews(in: panelText) + preparing {
 
-            let host = Offscreen.host(PanelPreview(state: state, scheme: scheme), scheme: scheme)
+            let host = Offscreen.host(PanelPreview(state: state, scheme: scheme, text: panelText), scheme: scheme)
             let image = try #require(Offscreen.snapshot(host), "\(name) did not render")
             #expect(CGFloat(image.pixelsWide) > PanelConfig.glassLedger.panelWidth, "\(name)")
 
@@ -101,7 +124,8 @@ struct PanelViewRenderTests {
                 #expect(!frame.isEmpty && visible.contains(frame), "\(name) held text is not visible")
             }
 
-            try Offscreen.save(image, "\(name)-\(scheme == .dark ? "dark" : "light")")
+            let suffix = language == .russian ? "" : "-\(language.rawValue)"
+            try Offscreen.save(image, "\(name)-\(scheme == .dark ? "dark" : "light")\(suffix)")
         }
     }
 }

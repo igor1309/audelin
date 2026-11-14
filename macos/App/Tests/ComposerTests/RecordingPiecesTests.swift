@@ -12,7 +12,7 @@ struct RecordingPiecesTests {
         let zone = Mutex(TimeZone.gmt)
         try await withComposeFolder { root in
             let calls = root.appendingPathComponent("calls")
-            try await offPool { try FileManager.default.createDirectory(at: calls, withIntermediateDirectories: false) }
+            try FileManager.default.createDirectory(at: calls, withIntermediateDirectories: false)
             let rig = try await ComposeFixture.make(root: root,
                 preferences: .init(automaticRecording: false, liveText: false, callsFolder: calls), configure: { boundary in
                     let time = boundary.time
@@ -24,7 +24,7 @@ struct RecordingPiecesTests {
                 try await rig.start()
                 try await rig.stop()
                 let name = "1970.01.01-0100"
-                #expect(await offPool { isFolder(calls.appendingPathComponent(name).path) })
+                #expect(isFolder(calls.appendingPathComponent(name).path))
                 #expect(try await recordedSamples(calls.appendingPathComponent(name).appendingPathComponent("call.caf")) == [-0.25, 0.5, -0.125])
                 #expect(rig.menu.preferences.callsFolder == calls)
                 await rig.finish()
@@ -35,12 +35,12 @@ struct RecordingPiecesTests {
     @Test func callFolderIsNamedWithTheCallAppAndAManualOneIsNot() async throws {
         try await withComposition { rig in
             try await rig.start(); try await rig.stop()
-            #expect(await offPool { isFolder(rig.folder().path) })
+            #expect(isFolder(rig.folder().path))
         }
         try await withComposition(configure: { $0.processes = FixtureProcesses(binding: CallBinding(fails: false)) }) { rig in
             _ = try await rig.state { $0.callOn }
             try await rig.start(); try await rig.stop()
-            #expect(await offPool { isFolder(rig.folder("1970.01.01-0000 Zoom").path) })
+            #expect(isFolder(rig.folder("1970.01.01-0000 Zoom").path))
             #expect(rig.selections.all == [.only([42])])
         }
     }
@@ -64,7 +64,8 @@ struct RecordingPiecesTests {
                 _ = try await rig.panel { if case let .lines(lines) = $0.log { lines.entries.count == 2 } else { false } }
                 try await rig.stop()
                 let reset = try await rig.panel { $0.recording == .off }
-                #expect(reset.log == .empty)
+                // The finished call stays readable until the next recording.
+                if case let .lines(lines) = reset.log { #expect(lines.entries.count == 2) } else { Issue.record("rows cleared") }
             }
             #expect(rig.microphone.starts.all == [true, true] && rig.call.starts.all == [true, true])
             #expect(rig.microphone.stops.all == [true, true] && rig.call.stops.all == [true, true])
@@ -94,7 +95,7 @@ struct RecordingPiecesTests {
             #expect(rig.log.entries.all.filter { $0.category == .model } == [
                 .init(category: .model, message: "recording refused", error: "\(missing.joined(separator: ", ")) not on disk"),
             ])
-            #expect(try await offPool { try FileManager.default.contentsOfDirectory(atPath: rig.root.path) } == ["preferences.json"])
+            #expect(try FileManager.default.contentsOfDirectory(atPath: rig.root.path) == ["preferences.json"])
         }
     }
 }

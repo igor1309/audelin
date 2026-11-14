@@ -28,7 +28,6 @@ public struct ReadingReducer: Sendable {
     public func reduce(_ state: ReadingState, _ event: ReadingEvent) -> (ReadingState, Never?) {
 
         var state = state
-        state.work = .init()
         switch event {
         case let .recordingChanged(recording):
             switch recording {
@@ -134,6 +133,29 @@ public struct ReadingReducer: Sendable {
             if let interaction { state.scrollAcknowledgement = interaction }
             state.lines.followsLive = atBottom
             if atBottom { state.lines.newBelow = 0 }
+        case let .namesConfirmed(names):
+            func confirm(_ entries: inout [ReadingTextUpdate.Entry.ID: ReadingState.Entry]) {
+                for (id, entry) in entries where id.speaker == .theirs {
+                    var entry = entry
+                    entry.name = names[id.localID]
+                    entry.nameConfirmed = entry.name != nil
+                    entries[id] = entry
+                }
+            }
+            confirm(&state.rendered.entries.sealed)
+            confirm(&state.rendered.entries.tail)
+            if state.rendered.prepared { rebuildLayout(&state) }
+        case let .speakersFound(places):
+            func place(_ entries: inout [ReadingTextUpdate.Entry.ID: ReadingState.Entry]) {
+                for (id, entry) in entries where id.speaker == .theirs {
+                    var entry = entry
+                    entry.remoteSpeaker = places[id.localID]
+                    entries[id] = entry
+                }
+            }
+            place(&state.rendered.entries.sealed)
+            place(&state.rendered.entries.tail)
+            if state.rendered.prepared { rebuildLayout(&state) }
         case .jumpToLive:
             state.lines.followsLive = true
             state.lines.newBelow = 0
@@ -171,7 +193,6 @@ public struct ReadingReducer: Sendable {
         while lower < upper {
             let middle = lower + (upper - lower) / 2
             let other = state.anchors[state.rendered.ordered[middle]]!
-            state.work.entryOrderComparisons += 1
             if other.start == anchor.start ? other.id < anchor.id : other.start < anchor.start {
                 lower = middle + 1
             } else {
@@ -210,9 +231,8 @@ public struct ReadingReducer: Sendable {
     ) -> ReadingState.Entry {
 
         let anchor = state.anchors[text.id]!
-        state.work.rowsBuilt += 1
         return .init(id: anchor.id, time: lineTime(anchor.start), speaker: text.id.speaker,
-                     settled: text.settled, pending: text.pending)
+                     settled: text.settled, pending: text.pending, name: text.name)
     }
 
     private func replaceRow(_ id: ReadingTextUpdate.Entry.ID, in state: inout ReadingState) {

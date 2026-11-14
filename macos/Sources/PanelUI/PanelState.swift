@@ -113,41 +113,27 @@ public extension PanelState {
         }
     }
 
-    enum Banner: Equatable, Sendable {
+    /// A problem shown above the log, with its text already in the panel's language.
+    struct Banner: Equatable, Sendable {
 
-        case callAudio, microphone, diskFull(savedUntil: String), callSilent
+        public enum Kind: Equatable, Sendable {
 
-        public var title: String {
-            switch self {
-            case .callAudio: "Нет звука звонка"
-            case .microphone: "Нет микрофона"
-            case .diskFull: "Диск заполнен — дорожка остановлена"
-            case .callSilent: "Звонок не слышен"
-            }
+            case callAudio, microphone, diskFull, callSilent
         }
 
-        public var line: String {
-            switch self {
-            case .callAudio: "Пишется только «я». Проверьте разрешение «Звук звонка»."
-            case .microphone: "Пишутся только «они». Проверьте устройство ввода и разрешение «Микрофон»."
-            case let .diskFull(time): "Всё до \(time) сохранено. Освободите место, чтобы продолжить."
-            case .callSilent: "5 минут тишины со стороны «они», пока вы говорите. Проверьте разрешение «Звук звонка»."
-            }
-        }
+        public var kind: Kind
+        public var title: String
+        public var line: String
+        public var button: String
+        public var action: PanelEvent
 
-        public var button: String {
-            switch self {
-            case .diskFull: "Открыть папку"
-            default: "Открыть настройки macOS"
-            }
-        }
+        public init(kind: Kind, title: String, line: String, button: String, action: PanelEvent) {
 
-        public var action: PanelEvent {
-            switch self {
-            case .microphone: .openSettings(.microphone)
-            case .callAudio, .callSilent: .openSettings(.systemAudioRecording)
-            case .diskFull: .openCallsFolder
-            }
+            self.kind = kind
+            self.title = title
+            self.line = line
+            self.button = button
+            self.action = action
         }
     }
 
@@ -173,15 +159,29 @@ public extension PanelState {
         public var settled: String
         /// Text still being recognised; drawn dim, with a caret after it.
         public var pending: String
+        /// The remote speaker's name or `Speaker N`, drawn on its own line above the
+        /// entry; set only where the speaker changes (design option C, LAB-1126).
+        public var label: String?
+        /// A live guess: drawn in italics and dimmer than a confirmed name.
+        public var labelIsTentative: Bool
+        /// The remote speaker's 1-based place in the call's speakers, drawn in that
+        /// speaker's colour; nil draws plain Them.
+        public var remoteSpeaker: Int?
 
         public init(
             id: Int,
             time: String,
             speaker: Speaker,
             settled: String,
-            pending: String = ""
+            pending: String = "",
+            label: String? = nil,
+            labelIsTentative: Bool = false,
+            remoteSpeaker: Int? = nil
         ) {
+            self.labelIsTentative = labelIsTentative
+            self.remoteSpeaker = remoteSpeaker
             self.id = id
+            self.label = label
             self.time = time
             self.speaker = speaker
             self.settled = settled

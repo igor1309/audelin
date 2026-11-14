@@ -1,0 +1,13 @@
+{
+  "name": "audelin-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jsdom": "^29.1.1"
+  }
+}

@@ -4,41 +4,33 @@ import Synchronization
 import Testing
 @testable import TranscriptFile
 
-let noTextTranscript = "# Transcript\n\nNo text was heard.\n"
+let initialText = "0 initial\n"
+let initialBytes = [Data(initialText.utf8)]
 
 func withTranscriptFolder(_ body: (URL) async throws -> Void) async throws {
 
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent("TranscriptFileTests-\(UUID())", isDirectory: true)
-    try await offPool { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false) }
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
     do { try await body(folder) } catch {
-        await offPool { try? FileManager.default.removeItem(at: folder) }
+        try? FileManager.default.removeItem(at: folder)
         throw error
     }
-    await offPool { try? FileManager.default.removeItem(at: folder) }
+    try? FileManager.default.removeItem(at: folder)
 }
 
 func transcriptText(_ url: URL) async throws -> String {
 
-    try await offPool { try String(contentsOf: url, encoding: .utf8) }
+    try String(contentsOf: url, encoding: .utf8)
 }
 
 func folderNames(_ folder: URL) async throws -> [String] {
 
-    try await offPool { try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted() }
+    try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
 }
 
-func numberedSegments(_ number: Int) -> [TranscriptFile.Segment] {
+func numberedBytes(_ number: Int) -> [Data] { [Data(numberedTranscript(number).utf8)] }
 
-    [
-        .init(side: .mine, start: 1, settled: "\(number) mine settled", pending: "\(number) mine pending"),
-        .init(side: .theirs, start: 2, settled: "\(number) theirs settled", pending: "\(number) theirs pending"),
-    ]
-}
-
-func numberedTranscript(_ number: Int) -> String {
-
-    "# Transcript\n\n**Me** 00:00:01\n\(number) mine settled \(number) mine pending\n\n**Them** 00:00:02\n\(number) theirs settled \(number) theirs pending\n"
-}
+func numberedTranscript(_ number: Int) -> String { "\(number) first\n\(number) second\n" }
 
 enum TranscriptFault: CaseIterable, Sendable {
 

@@ -45,6 +45,16 @@ struct RecordingSessionsTests {
         }
     }
 
+    /// The session's reading feed ends with it even when no transcript opened to close it.
+    @Test func aRecordingWhoseTranscriptNeverOpenedStillEnds() async throws {
+
+        try await withSessions(folderFails: true) { rig in
+            #expect(await rig.sessions.begin(id: 3) != .ready)
+            await rig.sessions.end(id: 3)
+            #expect(await rig.panel.states().first(where: { _ in true })?.recording == .off)
+        }
+    }
+
     @Test func repeatingABeginAnswersFromTheSameSession() async throws {
 
         try await withSessions { rig in
@@ -115,7 +125,6 @@ struct RecordingSessionsTests {
 }
 
 /// The same through the menu: a session that follows another owns its switch.
-@MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct FollowingSessionsTests {
 
@@ -187,7 +196,7 @@ private struct SessionsRig: Sendable {
     let log: FixtureLog
 }
 
-private func withSessions(_ body: @Sendable (SessionsRig) async throws -> Void) async throws {
+private func withSessions(folderFails: Bool = false, _ body: @Sendable (SessionsRig) async throws -> Void) async throws {
 
     try await withComposeFolder { root in
         let microphones = Captures(), calls = Captures(), reports = Reports(), log = FixtureLog(), clock = FixtureClock()
@@ -197,20 +206,24 @@ private func withSessions(_ body: @Sendable (SessionsRig) async throws -> Void) 
             mine: RehearsalRecognizer(SessionRecognizer(name: "mine")), theirs: RehearsalRecognizer(SessionRecognizer(name: "theirs")),
             now: { Date(timeIntervalSince1970: 0) }, timeZone: { .gmt }, sleep: clock.sleep, intervals: testIntervals)
         boundary.time = clock.time
+        boundary.transcripts = FileTranscriptStorage(diarizer: .unavailable)
         boundary.log = log
         boundary.processes = FixtureProcesses(binding: CallBinding(fails: false))
         let url = root.appendingPathComponent("preferences.json")
-        let preferences = try await offPool {
+        let preferences = try {
             let store = PreferencesStore(fileURL: url)
-            try store.write(Preferences(liveText: false, callsFolder: root))
+            // A plain file where the calls folder should be: no call folder, so no transcript, can open.
+            let calls = folderFails ? root.appendingPathComponent("calls-file") : root
+            if folderFails { try Data().write(to: calls) }
+            try store.write(Preferences(liveText: false, callsFolder: calls))
             return store
-        }
+        }()
         let processes = CoreAudioProcesses(binding: BoundaryProcesses(base: boundary.processes), clock: BoundaryCallClock(time: boundary.time))
         let app = RecordingCallApp()
         app.started("us.zoom.xos")
-        let panel = await AudelinPanel(now: clock.time.monotonicNow, ticks: clock.ticks, sink: log, intervals: testIntervals)
-        let sessions = RecordingSessions(preferences: preferences, callApp: app, processes: processes, boundary: boundary,
-                                         report: { id, report in reports.append(.init(id: id, report: report)) }, panel: panel)
+        let panel = await AudelinPanel(now: clock.time.monotonicNow, ticks: clock.ticks, sink: log, intervals: testIntervals, browser: { nil }, sleep: { _ in })
+        let sessions = RecordingSessions(preferences: preferences, occupiedCallNames: { [] }, callApp: app, processes: processes, boundary: boundary,
+                                         report: { id, report in reports.append(.init(id: id, report: report)) }, panel: panel, cleanupRuns: CleanupRuns())
         try await body(SessionsRig(sessions: sessions, panel: panel, microphones: microphones, calls: calls, reports: reports, log: log))
         await processes.stop()
     }

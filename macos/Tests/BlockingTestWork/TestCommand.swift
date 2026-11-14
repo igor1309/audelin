@@ -37,9 +37,7 @@ public final class TestCommand: @unchecked Sendable {
             ended.continuation.yield(process.terminationStatus)
             ended.continuation.finish()
         }
-        // Launching blocks while the child is spawned, so it happens off the cooperative pool.
-        let launching = process
-        do { try await offPool { try launching.run() } }
+        do { try process.run() }
         catch {
             pipe.fileHandleForReading.readabilityHandler = nil
             bytes.continuation.finish()
@@ -72,11 +70,9 @@ public final class TestCommand: @unchecked Sendable {
         kill()
         _ = await finish()
         pipe.fileHandleForReading.readabilityHandler = nil
-        await offPool { [self] in
-            try? pipe.fileHandleForReading.close()
-            try? input.fileHandleForWriting.close()
-            try? input.fileHandleForReading.close()
-            try? pipe.fileHandleForWriting.close()
-        }
+        try? pipe.fileHandleForReading.close()
+        try? input.fileHandleForWriting.close()
+        try? input.fileHandleForReading.close()
+        try? pipe.fileHandleForWriting.close()
     }
 }

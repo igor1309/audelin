@@ -68,13 +68,15 @@ private func secondsPerHearing(after history: Int) -> (seconds: Double, lost: In
     let past = (0..<history).flatMap { _ in spoken.next().words.suffix(1) }
     segments.hear(Hearing(words: past, finalThrough: past.last.map { $0.end }))
 
-    let hearings = 200
+    // About 20 ms a run: long enough that one pause of a busy runner's
+    // scheduler cannot pass for a hearing's cost.
+    let hearings = 2_000
     let clock = ContinuousClock()
     let elapsed = clock.measure {
         for _ in 0..<hearings { segments.hear(spoken.next()) }
     }
     let said = (0..<history + hearings).map { "w\($0)" }
-    let held = segments.all.flatMap { ($0.settled + " " + $0.pending).split(separator: " ").map(String.init) }
+    let held = segments.all.flatMap { $0.words.map(\.text) }
     let lost = held.difference(from: said).removals.count
     return ((Double(elapsed.components.attoseconds) / 1e18 + Double(elapsed.components.seconds)) / Double(hearings), lost)
 }

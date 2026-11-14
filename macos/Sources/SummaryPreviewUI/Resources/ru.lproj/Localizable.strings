@@ -1,0 +1,14 @@
+"preview.copy" = "Копировать";
+"preview.unreadable" = "Итоги не читаются: %@";
+"preview.open" = "Открыть";
+"preview.rename" = "Переименовать";
+"preview.retrySummary" = "Повторить итоги";
+"preview.delete" = "Удалить…";
+"preview.making" = "Делаю…";
+"preview.cancel" = "Отменить";
+"preview.make" = "Сделать";
+"preview.made" = "Сделано %@";
+"preview.failed" = "Не удалось подготовить итоги";
+"preview.noSummary" = "Нет итогов";
+"preview.noSelection" = "Звонок не выбран";
+"preview.notesLabel" = "Итоги";

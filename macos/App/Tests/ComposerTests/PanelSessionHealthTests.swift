@@ -1,4 +1,3 @@
-import struct CallText.State
 import PanelUI
 import Session
 import Testing
@@ -23,8 +22,8 @@ struct PanelSessionHealthTests {
             (.track(side), .failed("disk"), .diskFull(savedUntil: "00:00"), "диск заполнен"),
         ]
         for (piece, health, banner, reason) in variants {
-            let clock = FixtureClock(), text = AsyncStream<State>.makeStream()
-            let panel = AudelinPanel(now: clock.time.monotonicNow, ticks: clock.ticks, sink: TestLogSink(), intervals: testIntervals)
+            let clock = FixtureClock(), text = AsyncStream<CallState>.makeStream()
+            let panel = AudelinPanel(now: clock.time.monotonicNow, ticks: clock.ticks, sink: TestLogSink(), intervals: testIntervals, browser: { nil }, sleep: { _ in })
             let reading = await panel.begin(id: 1, text: text.stream, enableLiveText: {})
             reading.sessionChanged(SessionState(health: [piece: health], phase: .recording))
             for await shown in await panel.states() where shown.banners == [banner] {
@@ -33,17 +32,17 @@ struct PanelSessionHealthTests {
                 ])))
                 break
             }
+            text.continuation.finish()
             await reading.end()
             await panel.end(id: 1)
-            text.continuation.finish()
             clock.finish()
         }
     }
 
     @MainActor
     @Test func folderAndTranscriptHealthDoNotCreateAudioProblems() async throws {
-        let clock = FixtureClock(), text = AsyncStream<State>.makeStream()
-        let panel = AudelinPanel(now: clock.time.monotonicNow, ticks: clock.ticks, sink: TestLogSink(), intervals: testIntervals)
+        let clock = FixtureClock(), text = AsyncStream<CallState>.makeStream()
+        let panel = AudelinPanel(now: clock.time.monotonicNow, ticks: clock.ticks, sink: TestLogSink(), intervals: testIntervals, browser: { nil }, sleep: { _ in })
         let reading = await panel.begin(id: 1, text: text.stream, enableLiveText: {})
         reading.sessionChanged(SessionState(health: [.folder: .failed("folder"), .transcript: .failed("text")], phase: .recording))
         for await shown in await panel.states() where shown.recording == .on(elapsed: "00:00:00") {
@@ -51,9 +50,9 @@ struct PanelSessionHealthTests {
             #expect(shown.log == .liveTextOff(kept: nil))
             break
         }
+        text.continuation.finish()
         await reading.end()
         await panel.end(id: 1)
-        text.continuation.finish()
         clock.finish()
     }
 }

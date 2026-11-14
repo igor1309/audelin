@@ -1,4 +1,6 @@
+import CallDiarizer
 import Composer
+import BleedCleanup
 import Foundation
 import LiveText
 import Preferences
@@ -46,7 +48,9 @@ public func rehearsalBoundary(
                 }
                 output.onTermination = { _ in task.cancel() }
             }
-        }), log: RehearsalLog(), intervals: intervals, recordings: FileRecordingStorage())
+        }), log: RehearsalLog(), intervals: intervals, recordings: FileRecordingStorage(), trash: ComposerBoundary.systemTrash, bleedCleaning: RehearsalCleaning(),
+        bleedHearing: CleanupHearing(recognizers: RehearsalRecognizers(mine: mine, theirs: theirs)),
+        transcripts: FileTranscriptStorage(diarizer: CallDiarizer(binding: FluidDiarizationBinding())))
 }
 
 private struct RehearsalMicrophone: MicrophoneSource {
@@ -91,13 +95,7 @@ private struct RehearsalProcesses: CallProcessSource {
 public func startRehearsal(boundary: ComposerBoundary, root: URL, call: RehearsalCallApp? = nil,
                            presentPanel: @escaping (Bool) -> Void = { _ in }) async throws -> AudelinMenu {
     let url = root.appendingPathComponent("preferences.json")
-    try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
-        DispatchQueue(label: "audelin.rehearsal.preferences").async {
-            done.resume(with: Result {
-                try PreferencesStore(fileURL: url).write(Preferences(automaticRecording: call != nil, liveText: true, callsFolder: root))
-            })
-        }
-    }
+    try PreferencesStore(fileURL: url).write(Preferences(automaticRecording: call != nil, liveText: true, callsFolder: root))
     let composition = await compose(boundary: boundary, preferencesURL: url,
         openCallsFolder: { _ in false }, presentCalls: {}, openURL: { _ in }, presentPanel: presentPanel, terminate: {})
     if let call { call.join() } else { await composition.perform(.start) }
@@ -123,3 +121,9 @@ public func endRehearsalCall(_ composition: AudelinMenu, call: RehearsalCallApp)
     return nil
 }
 private enum RehearsalFailure: Error { case cannotRecord(String), ended }
+
+/// Synthetic captures have no acoustic bleed to remove.
+private struct RehearsalCleaning: MicrophoneCleaning {
+    enum Failure: Error { case syntheticRecording }
+    func clean(_ recording: CleanupRecording) throws -> [Float] { throw Failure.syntheticRecording }
+}

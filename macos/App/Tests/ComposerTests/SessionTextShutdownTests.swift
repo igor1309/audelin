@@ -17,7 +17,6 @@ private actor FinalizingRecognizer: Recognizer {
     }
 }
 
-@MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct SessionTextShutdownTests {
     @Test(arguments: [ComposerSide.microphone, .call])
@@ -40,7 +39,7 @@ struct SessionTextShutdownTests {
             #expect(await mine.base.finishes == 1)
             #expect(await theirs.base.finishes == 1)
             let url = rig.folder().appendingPathComponent("transcript.md")
-            #expect(try await offPool { try String(contentsOf: url, encoding: .utf8) }
+            #expect(try String(contentsOf: url, encoding: .utf8)
                 == "# Transcript\n\n**Me** 00:00:00\nkept final\n\n**Them** 00:00:00\nkept final\n")
         }
     }

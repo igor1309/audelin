@@ -1,4 +1,3 @@
-import struct CallText.State
 import Foundation
 import Observation
 import PanelUI
@@ -26,17 +25,26 @@ actor AudelinPanel {
     private let ticks: @Sendable () -> AsyncStream<Void>
     private let intervals: ProfileIntervals
     private let sink: any LogSink
+    private let browser: @Sendable () -> BrowserChannel?
+    private let sleep: @Sendable (Duration) async throws -> Void
     private var current: (id: UInt64, reading: ReadingInputs, enableLiveText: @Sendable () async -> Void)?
+    private var subscription: (id: UInt64, value: ReadingSubscription)?
     private var state = PanelState(recording: .off, log: .empty)
     private var mappedRows = MappedRows()
+    private var panelText = PanelText(language: .russian)
+    /// The reading state last mapped, so a new language can map it again.
+    private var lastReading: ReadingState?
     private var subscribers: [UInt64: AsyncStream<PanelState>.Continuation] = [:]
     private var nextSubscriber: UInt64 = 0
 
     init(
         now: @escaping @Sendable () -> Double, ticks: @escaping @Sendable () -> AsyncStream<Void>, sink: any LogSink,
-        intervals: ProfileIntervals
+        intervals: ProfileIntervals, browser: @escaping @Sendable () -> BrowserChannel?,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
     ) {
 
+        self.browser = browser
+        self.sleep = sleep
         self.now = now
         self.ticks = ticks
         self.sink = sink
@@ -62,30 +70,53 @@ actor AudelinPanel {
         if let event = readingEvent(event), let reading = current?.reading { await reading.send(event) }
     }
 
-    func begin(id: UInt64, text: AsyncStream<State>, enableLiveText: @escaping @Sendable () async -> Void) async -> ReadingSubscription {
+    func begin(id: UInt64, text: AsyncStream<CallState>, speakers: AsyncStream<[Int: Int]> = AsyncStream { $0.finish() },
+               enableLiveText: @escaping @Sendable () async -> Void) async -> ReadingSubscription {
 
         let reading = await makeReading()
         current = (id, reading, enableLiveText)
         mappedRows = .init()
+        lastReading = nil
         let update = SignpostedPanelUpdate(receive: { [weak self] state in
             await self?.receive(state, id: id)
         }, intervals: intervals)
-        return await ReadingSubscription(reading: reading, text: text, now: now, ticks: ticks(), sink: sink) { state in
+        let made = await ReadingSubscription(reading: reading, text: text, speakers: speakers, now: now, ticks: ticks(), sink: sink,
+                                                  names: CallLiveNames(openBrowser: browser, monotonic: now, sleep: sleep)) { state in
             await update(state)
         }
+        if current?.id == id { subscription = (id, made) }
+        return made
     }
 
-    func end(id: UInt64) {
+    /// Takes the recording's reading feed to its end first, so its last text and speakers are shown;
+    /// the feed's streams must finish for this to return.
+    func end(id: UInt64) async {
 
         guard current?.id == id else { return }
+        if let subscription, subscription.id == id { await subscription.value.end() }
+        guard current?.id == id else { return }
         current = nil
-        publish(.init(recording: .off, log: .empty))
+        subscription = nil
+        // The finished call stays readable, with its confirmed names, until the next recording.
+        publish(.init(recording: .off, log: state.log))
     }
 
     private func receive(_ state: ReadingState, id: UInt64) {
 
         guard current?.id == id else { return }
-        publish(panelState(state, rows: &mappedRows))
+        lastReading = state
+        publish(panelState(panelText.callAsFunction, state, rows: &mappedRows))
+    }
+
+    /// Maps what the panel shows again, from scratch, in the new language.
+    func languageChanged(_ text: PanelText) {
+
+        guard text != panelText else { return }
+        panelText = text
+        mappedRows = .init()
+        guard let lastReading else { return }
+        let next = panelState(panelText.callAsFunction, lastReading, rows: &mappedRows)
+        publish(current == nil ? .init(recording: .off, log: next.log) : next)
     }
 
     private func publish(_ next: PanelState) {
@@ -115,13 +146,16 @@ final class ReadingSubscription {
     private let text: Task<Void, Never>
     private let timer: Task<Void, Never>
     private let observation: Task<Void, Never>
+    private let names: CallLiveNames
+    private var ended = false
 
     init(
-        reading: ReadingInputs, text: AsyncStream<State>,
-        now: @escaping @Sendable () -> Double, ticks: AsyncStream<Void>, sink: any LogSink,
+        reading: ReadingInputs, text: AsyncStream<CallState>, speakers: AsyncStream<[Int: Int]>,
+        now: @escaping @Sendable () -> Double, ticks: AsyncStream<Void>, sink: any LogSink, names: CallLiveNames,
         receive: @escaping @Sendable (ReadingState) async -> Void
     ) async {
 
+        self.names = names
         self.reading = reading
         let time = ReadingTime(reading: reading, now: now)
         self.time = time
@@ -135,12 +169,23 @@ final class ReadingSubscription {
                 await presenter.show(state)
             }
         }
+        LiveNameBoard.shared.listen { names in await reading.send(.namesConfirmed(names)) }
+        let names = self.names
+        await names.start { await time.elapsed() }
         self.text = Task {
             var mapped = 0
             for await state in text {
                 guard !Task.isCancelled else { return }
-                reading.send(.textUpdated(readingText(state, from: mapped)))
+                let remote = state.entries[mapped...].filter { $0.speaker != .mine }
+                    .map { (id: $0.text.id, start: $0.text.start, end: $0.text.end) }
+                let given = remote.isEmpty ? [:] : await names.names(for: remote)
+                reading.send(.textUpdated(readingText(state, from: mapped, names: given)))
                 mapped = state.finalCount
+            }
+            // The speakers come after the call's last text, so every row they name is shown.
+            for await places in speakers {
+                guard !Task.isCancelled else { return }
+                reading.send(.speakersFound(places))
             }
         }
         timer = Task {
@@ -162,11 +207,14 @@ final class ReadingSubscription {
         time.problemsChanged(readingFaultKinds(state), callSilent: state.audioWarning == .callSilent)
     }
 
+    /// Waits for the text and speaker streams to finish, so every state they sent is reduced.
     func end() async {
 
-        text.cancel()
-        timer.cancel()
+        guard !ended else { return }
+        ended = true
+        await names.stop()
         await text.value
+        timer.cancel()
         await timer.value
         time.recordingChanged(.off)
         // The model reduces the event later; wait until the state shows it.
@@ -250,6 +298,9 @@ private final class ReadingTime {
         }
         reading.send(.problemsChanged(problems))
     }
+
+    /// Seconds since the recording began, or nil while it is off.
+    func elapsed() -> Double? { origin.map { now() - $0 } }
 
     func tick() {
 

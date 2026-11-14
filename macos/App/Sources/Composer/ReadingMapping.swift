@@ -1,5 +1,4 @@
 import Foundation
-import struct CallText.State
 import PanelUI
 import SplitRows
 import Reading
@@ -12,7 +11,7 @@ func readingRecording(_ state: SessionState) -> ReadingRecording {
 }
 
 /// Maps the entries from position `from` on; those before it are already final.
-func readingText(_ state: State, from: Int = 0) -> ReadingTextUpdate {
+func readingText(_ state: CallState, from: Int = 0, names: [Int: String] = [:]) -> ReadingTextUpdate {
 
     let status: ReadingTextUpdate.Status = switch state.status {
     case .off: .off
@@ -25,7 +24,10 @@ func readingText(_ state: State, from: Int = 0) -> ReadingTextUpdate {
         .init(
             id: .init(speaker: entry.speaker == .mine ? .mine : .theirs, localID: entry.text.id),
             start: entry.text.start, end: entry.text.end,
-            settled: entry.text.settled, pending: entry.text.pending, writtenLater: entry.writtenLater
+            settled: entry.text.settledText,
+            pending: entry.text.pendingText,
+            writtenLater: entry.writtenLater,
+            name: entry.speaker == .mine ? nil : names[entry.text.id]
         )
     }, from: from, finalCount: state.finalCount)
 }
@@ -47,15 +49,18 @@ struct MappedRows {
     var layout = -1
     var mapped = 0
     var sealed: [PanelState.Row] = []
+    /// The last sealed entry's remote speaker, so a caption shows only where it changes.
+    var previousSpeaker: CaptionedSpeaker?
 }
 
-func panelState(_ state: ReadingState) -> PanelState {
+func panelState(_ text: (PanelPhrase) -> String, _ state: ReadingState) -> PanelState {
 
     var rows = MappedRows()
-    return panelState(state, rows: &rows)
+    return panelState(text, state, rows: &rows)
 }
 
-func panelState(_ state: ReadingState, rows: inout MappedRows) -> PanelState {
+/// Maps reading state to what the panel shows; `text` gives the panel's fixed text in its language.
+func panelState(_ text: (PanelPhrase) -> String, _ state: ReadingState, rows: inout MappedRows) -> PanelState {
 
     let recording: PanelState.Recording = switch state.recording {
     case .off: .off
@@ -63,45 +68,74 @@ func panelState(_ state: ReadingState, rows: inout MappedRows) -> PanelState {
     }
     let log: PanelState.Log = switch state.log {
     case .empty: .empty
-    case let .liveTextOff(kept): .liveTextOff(kept: kept.map { panelLines($0, acknowledgement: state.scrollAcknowledgement, rows: &rows) })
+    case let .liveTextOff(kept): .liveTextOff(kept: kept.map { panelLines($0, text: text, acknowledgement: state.scrollAcknowledgement, rows: &rows) })
     case let .preparing(holds): .preparing(holds: holds.map(panelHeld))
-    case let .lines(lines): .lines(panelLines(lines, acknowledgement: state.scrollAcknowledgement, rows: &rows))
+    case let .lines(lines): .lines(panelLines(lines, text: text, acknowledgement: state.scrollAcknowledgement, rows: &rows))
     }
     return .init(recording: recording, log: log, banners: state.banners.map { banner in
-        switch banner.kind {
-        case .callAudio: .callAudio
-        case .microphone: .microphone
-        case .diskFull: .diskFull(savedUntil: banner.time)
-        case .callSilent: .callSilent
+        let settings = text(.openSettings)
+        return switch banner.kind {
+        case .callAudio:
+            .init(kind: .callAudio, title: text(.callAudioTitle), line: text(.callAudioLine),
+                  button: settings, action: .openSettings(.systemAudioRecording))
+        case .microphone:
+            .init(kind: .microphone, title: text(.microphoneTitle), line: text(.microphoneLine),
+                  button: settings, action: .openSettings(.microphone))
+        case .diskFull:
+            .init(kind: .diskFull, title: text(.diskFullTitle), line: String(format: text(.diskFullLine), banner.time),
+                  button: text(.openFolder), action: .openCallsFolder)
+        case .callSilent:
+            .init(kind: .callSilent, title: text(.callSilentTitle), line: text(.callSilentLine),
+                  button: settings, action: .openSettings(.systemAudioRecording))
         }
     })
 }
 
-private func panelRow(_ row: ReadingState.Row) -> PanelState.Row {
+private func panelRow(_ row: ReadingState.Row, text: (PanelPhrase) -> String, previous: inout CaptionedSpeaker?) -> PanelState.Row {
 
     switch row {
-    case let .entry(entry): .entry(panelEntry(entry))
+    case let .entry(entry): .entry(panelEntry(entry, text: text, previous: &previous))
     case let .gap(gap):
-        .gap(.init(speaker: gap.speaker == .mine ? .me : .them, text: gapText(gap)))
-    case let .late(group): .late(.init(span: group.span, entries: group.entries.map(panelEntry)))
+        .gap(.init(speaker: gap.speaker == .mine ? .me : .them, text: gapText(gap, text: text)))
+    case let .late(group): .late(.init(span: group.span, entries: group.entries.map { panelEntry($0, text: text, previous: &previous) }))
     }
 }
 
-private func panelLines(_ lines: ReadingState.Lines, acknowledgement: UUID?, rows: inout MappedRows) -> PanelState.Lines {
+private func panelLines(_ lines: ReadingState.Lines, text: (PanelPhrase) -> String, acknowledgement: UUID?, rows: inout MappedRows) -> PanelState.Lines {
 
     let sealed = lines.rows.sealed
     if rows.layout != lines.layout || rows.mapped > sealed.count { rows = .init(layout: lines.layout) }
     if rows.mapped < sealed.count {
-        rows.sealed.append(contentsOf: sealed[rows.mapped...].map(panelRow))
+        rows.sealed.append(contentsOf: sealed[rows.mapped...].map { panelRow($0, text: text, previous: &rows.previousSpeaker) })
         rows.mapped = sealed.count
     }
-    return .init(rows: .init(sealed: rows.sealed, tail: lines.rows.tail.map(panelRow)), holds: lines.holds.map(panelHeld), newBelow: lines.newBelow, followsLive: lines.followsLive, scrollAcknowledgement: acknowledgement)
+    var previous = rows.previousSpeaker
+    let tail = lines.rows.tail.map { panelRow($0, text: text, previous: &previous) }
+    return .init(rows: .init(sealed: rows.sealed, tail: tail), holds: lines.holds.map(panelHeld), newBelow: lines.newBelow, followsLive: lines.followsLive, scrollAcknowledgement: acknowledgement)
 }
 
-private func panelEntry(_ entry: ReadingState.Entry) -> PanelState.Entry {
+/// A remote speaker is captioned only where it differs from the entry before (design option C):
+/// by name, else by its place among the call's speakers. Live names are guesses until the
+/// after-call pass.
+private func panelEntry(_ entry: ReadingState.Entry, text: (PanelPhrase) -> String, previous: inout CaptionedSpeaker?) -> PanelState.Entry {
 
-    .init(id: entry.id, time: entry.time, speaker: entry.speaker == .mine ? .me : .them,
-          settled: entry.settled, pending: entry.pending)
+    let remote = entry.speaker != .mine
+    let place = remote ? entry.remoteSpeaker : nil
+    let name = remote ? entry.name : nil
+    let caption = name ?? place.map { String(format: text(.themNumbered), $0) }
+    let speaker = place.map(CaptionedSpeaker.place) ?? name.map(CaptionedSpeaker.name)
+    let label = speaker != nil && speaker != previous ? caption : nil
+    defer { previous = speaker }
+    return .init(id: entry.id, time: entry.time, speaker: remote ? .them : .me,
+                 settled: entry.settled, pending: entry.pending,
+                 label: label, labelIsTentative: label != nil && name != nil && !entry.nameConfirmed,
+                 remoteSpeaker: place)
+}
+
+/// Who a remote entry is: its place among the call's speakers once known, else its live name.
+enum CaptionedSpeaker: Equatable {
+    case place(Int)
+    case name(String)
 }
 
 private func panelHeld(_ held: ReadingState.Held) -> PanelState.Held {
@@ -109,15 +143,15 @@ private func panelHeld(_ held: ReadingState.Held) -> PanelState.Held {
     .init(entryID: held.entryID, text: held.text)
 }
 
-private func gapText(_ gap: ReadingState.Gap) -> String {
+private func gapText(_ gap: ReadingState.Gap, text: (PanelPhrase) -> String) -> String {
 
-    let reason = switch gap.kind {
-    case .callAudio: "нет звука звонка"
-    case .microphone: "нет микрофона"
-    case .diskFull: "диск заполнен"
-    case .callSilent: ""
+    let format = switch gap.kind {
+    case .callAudio: text(.gapCallAudio)
+    case .microphone: text(.gapMicrophone)
+    case .diskFull: text(.gapDiskFull)
+    case .callSilent: text(.gapCallSilent)
     }
-    return "— \(reason) с \(gap.time) —"
+    return String(format: format, gap.time)
 }
 
 /// One health mapping supplies both the menu's faults and the panel's failed sides.

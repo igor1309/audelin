@@ -3,9 +3,17 @@ import Composer
 import Foundation
 import Testing
 
-@MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct SessionTranscriptTests {
+    @Test func liveTextOffLeavesTheNoTextTranscriptAfterStopping() async throws {
+        try await withComposition(preferences: { .init(automaticRecording: false, liveText: false, callsFolder: $0) }) { rig in
+            try await rig.start()
+            try await rig.stop()
+            let url = rig.folder().appendingPathComponent("transcript.md")
+            #expect(try String(contentsOf: url, encoding: .utf8) == "# Transcript\n\nNo text was heard.\n")
+        }
+    }
+
     @Test func theAppWaitsFiveSecondsAfterEachTranscriptWrite() async throws {
         try await withComposition { rig in
             try await rig.start()
@@ -24,7 +32,7 @@ struct SessionTranscriptTests {
             await rig.clock.waitForSleep(.seconds(5))
             // Removing the destination gives the real writer a deterministic missing-parent failure.
             let folder = rig.folder()
-            try await offPool { try FileManager.default.removeItem(at: folder) }
+            try FileManager.default.removeItem(at: folder)
             rig.clock.wake(.seconds(5))
             await rig.log.wait { $0.category == .session && $0.message.contains("phase=recording") && $0.error?.contains("transcript:") == true }
             let recording = try await rig.state { $0.phase == .recording }

@@ -1,4 +1,3 @@
-import Dispatch
 import AudioConversion
 import LiveText
 
@@ -27,13 +26,6 @@ public struct WindowWord: Equatable, Sendable {
 /// chunk with 2 s of audio on each side.
 public actor ParakeetRecognizer: Recognizer {
 
-    // Conversion and inference block, so they run on this queue, not the cooperative pool.
-    // Inference reaches it through a task executor preference, which default actors and
-    // nonisolated async code follow; an actor with its own executor, or an unstructured
-    // task it starts, does not.
-    private nonisolated let queue = DispatchSerialQueue(label: "audelin.ParakeetRecognizer")
-    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
-
     private static let rate = 16_000.0
     private static let chunk = 4.0
     private static let context = 2.0
@@ -53,9 +45,9 @@ public actor ParakeetRecognizer: Recognizer {
     private var reportedCount = 0
     private var pendingFrom: Double?
 
-    public init(reader: any WindowReader) {
+    public init(readers: ParakeetReaders) async throws {
 
-        self.reader = reader
+        reader = try await readers.make()
     }
 
     public func hear(_ chunk: AudioChunk) async throws -> Hearing {
@@ -86,7 +78,7 @@ public actor ParakeetRecognizer: Recognizer {
         let start = max(0, chunkStart - Self.context)
         let end = min(audio.end, chunkStart + Self.chunk + Self.context)
         let chunkEnd = chunkStart + Self.chunk
-        let read = try await withTaskExecutorPreference(queue) { try await reader.read(audio.samples(from: start, to: end)) }
+        let read = try await reader.read(audio.samples(from: start, to: end))
             .map { Word($0.text, start: $0.start + start, end: $0.end + start) }
 
         // A pending word that starts before the window can never be read

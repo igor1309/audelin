@@ -2,6 +2,9 @@
 /// it out.
 public struct SettingsState: Equatable, Sendable {
 
+    public var selectedTab: Tab
+    public var general: General
+    public var callNotes: CallNotes
     public var recordsCalls: Bool
     public var liveText: Bool
     public var folder: Folder
@@ -22,8 +25,14 @@ public struct SettingsState: Equatable, Sendable {
         selectedEngine: Engine.ID?,
         explainKeys: String,
         chunk: Chunk? = nil,
-        moveConfirm: MoveConfirm? = nil
+        moveConfirm: MoveConfirm? = nil,
+        selectedTab: Tab = .recording,
+        callNotes: CallNotes = .loading(""),
+        general: General = .empty
     ) {
+        self.selectedTab = selectedTab
+        self.general = general
+        self.callNotes = callNotes
         self.recordsCalls = recordsCalls
         self.liveText = liveText
         self.folder = folder
@@ -58,6 +67,8 @@ public extension SettingsState {
             case failed(moved: String, reason: String)
             /// A move cannot start while a call is recording.
             case recording
+            /// The folder picker did not open; the path is unchanged and **Изменить…** can be tried again.
+            case pickerFailed(reason: String)
         }
     }
 

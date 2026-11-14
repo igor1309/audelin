@@ -1,4 +1,3 @@
-import Dispatch
 import Foundation
 import Recording
 import Synchronization
@@ -10,12 +9,12 @@ final class RecordingConditions: Sendable {
     private let send: @Sendable (RecordingEvent) async -> Void
     private let lastSent = Mutex<[RecordingCondition: Bool]>([:])
     private let turn = Turn()
+    private let storageMoving = Mutex(false)
     private let access: AccessPolicy
     private let observation = Mutex<Task<Void, Never>?>(nil)
-    // The checks read the disk and access status, which block, so they run here.
-    private let checking = DispatchQueue(label: "audelin.RecordingConditions")
 
-    init(recording: RecordingInputs, callsURL: URL, boundary: ComposerBoundary) {
+    init(recording: RecordingInputs, callsURL: URL, boundary: ComposerBoundary, currentFolder: (@Sendable () -> URL)? = nil) {
+        let folder: @Sendable () -> URL = currentFolder ?? { callsURL }
         let access = accessPolicy(boundary.access)
         let send = recording.send
         let sink = boundary.log
@@ -26,8 +25,8 @@ final class RecordingConditions: Sendable {
         }
         checks = [
             (.microphoneAccess, { boundary.microphonePermission.authorized() }),
-            (.callsFolder, { isCallsDirectory(callsURL) && FileManager.default.isWritableFile(atPath: callsURL.path) }),
-            (.room, { callsFolderHasRoom(at: callsURL, availableCapacity: { boundary.capacity.available(at: $0) }) }),
+            (.callsFolder, { isCallsDirectory(folder()) && FileManager.default.isWritableFile(atPath: folder().path) }),
+            (.room, { callsFolderHasRoom(at: folder(), availableCapacity: { boundary.capacity.available(at: $0) }) }),
         ]
         observation.withLock { $0 = Task { [weak self] in
             for await _ in await access.states() {
@@ -36,18 +35,23 @@ final class RecordingConditions: Sendable {
         } }
     }
 
+    func setStorageMoving(_ moving: Bool) async {
+        await turn.take()
+        storageMoving.withLock { $0 = moving }
+        if moving { await publish(.callsFolder, available: false) }
+        turn.give()
+    }
+
     func refresh() async {
         _ = await access.refresh()
         await turn.take()
-        let checks = checks
-        var readings = await withCheckedContinuation { (done: CheckedContinuation<[(RecordingCondition, Bool)], Never>) in
-            checking.async { done.resume(returning: checks.map { ($0.0, $0.1()) }) }
-        }
+        // The checks read the disk and access status where they are called; the turn orders them.
+        var readings = checks.map { ($0.0, $0.1()) }
         for await state in await access.states() {
             readings.insert((.callAudioAccess, state.published), at: 1)
             break
         }
-        for (condition, available) in readings { await publish(condition, available: available) }
+        for (condition, available) in readings { await publish(condition, available: available && (condition != .callsFolder || !storageMoving.withLock { $0 })) }
         turn.give()
     }
 
@@ -73,47 +77,9 @@ final class RecordingConditions: Sendable {
     deinit { observation.withLock { $0 }?.cancel() }
 }
 
-/// A first-come lock that an async holder keeps across its awaits.
-private final class Turn: Sendable {
+func composeRecordingConditions(recording: RecordingInputs, callsURL: URL, boundary: ComposerBoundary, currentFolder: (@Sendable () -> URL)? = nil) -> RecordingConditions {
 
-    private struct State {
-
-        var taken = false
-        var waiting: [CheckedContinuation<Void, Never>] = []
-    }
-    private let state = Mutex(State())
-
-    func take() async {
-
-        await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
-            let granted = state.withLock { state in
-                guard state.taken else {
-                    state.taken = true
-                    return true
-                }
-                state.waiting.append(waiter)
-                return false
-            }
-            if granted { waiter.resume() }
-        }
-    }
-
-    func give() {
-
-        let next = state.withLock { state -> CheckedContinuation<Void, Never>? in
-            guard !state.waiting.isEmpty else {
-                state.taken = false
-                return nil
-            }
-            return state.waiting.removeFirst()
-        }
-        next?.resume()
-    }
-}
-
-func composeRecordingConditions(recording: RecordingInputs, callsURL: URL, boundary: ComposerBoundary) -> RecordingConditions {
-
-    RecordingConditions(recording: recording, callsURL: callsURL, boundary: boundary)
+    RecordingConditions(recording: recording, callsURL: callsURL, boundary: boundary, currentFolder: currentFolder)
 }
 
 private func callsFolderHasRoom(at url: URL, availableCapacity: @Sendable (URL) -> Int64?) -> Bool {

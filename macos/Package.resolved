@@ -1,13 +1,22 @@
 {
-  "originHash" : "bc2c9267164343b1b1770e5cead9f6383e8170412d49e4885d363be8cf3821fc",
+  "originHash" : "3bfe7b4eb30a443262f2e465099a7e263c3c01f9363daf640449b0e02f2543fa",
   "pins" : [
     {
-      "identity" : "fluidaudio",
+      "identity" : "swift-cmark",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/FluidInference/FluidAudio.git",
+      "location" : "https://github.com/swiftlang/swift-cmark.git",
       "state" : {
-        "revision" : "503b4bd1bbf7220882de39fe8ae6716aae4132da",
-        "version" : "0.17.7"
+        "revision" : "08ddb528923cc1a6527e02b7a1aee9e516ca749a",
+        "version" : "0.9.0"
+      }
+    },
+    {
+      "identity" : "swift-markdown",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-markdown.git",
+      "state" : {
+        "revision" : "25cb61d3482054b09ae76ca4f281b1bfe7fe5a43",
+        "version" : "0.9.0"
       }
     }
   ],

@@ -5,6 +5,7 @@ import Reading
 import Recording
 import Recordings
 import Session
+import SettingsUI
 
 /// Each recording's reading model, reducing on the main actor.
 @MainActor
@@ -20,6 +21,18 @@ func makeReading() -> ReadingInputs {
 /// taking `Never`: a closure given it "will never be executed".
 private func noEvents<Effect, Event>(_: Effect) -> AsyncStream<Event> { AsyncStream { $0.finish() } }
 
+/// The stream a model reads from a handler that returns one event.
+func oneEvent<Event: Sendable>(_ handle: @escaping @Sendable () async -> Event) -> AsyncStream<Event> {
+
+    AsyncStream { output in
+        let task = Task {
+            output.yield(await handle())
+            output.finish()
+        }
+        output.onTermination = { _ in task.cancel() }
+    }
+}
+
 /// Recording's model, reducing on the main actor, and the doer that makes the Session follow it.
 @MainActor
 func makeRecording(
@@ -32,12 +45,15 @@ func makeRecording(
     let doer = RecordingDoer(session: session, callAudioReady: callAudioReady,
                              callAudioReleased: callAudioReleased, send: { await model.send($0) })
     let acting = Task { for await state in model.states() { doer.act(on: state) } }
-    return RecordingInputs(
+    var inputs = RecordingInputs(
         send: { await model.send($0) },
         state: { await model.state },
         states: { await model.states() },
         end: { acting.cancel(); await model.end() }
     )
+    inputs.reserveStorage = { await model.reserveStorage() }
+    inputs.releaseStorage = { await model.send(.releaseStorage) }
+    return inputs
 }
 
 /// Holds the sync model on the main actor; callers elsewhere await the hop.
@@ -62,6 +78,11 @@ final class RecordingModel {
     }
 
     var state: RecordingState { model.state }
+    func reserveStorage() -> Bool {
+        let previouslyReserved = model.state.storageReserved
+        model.event(.reserveStorage)
+        return !previouslyReserved && model.state.storageReserved
+    }
 
     func send(_ event: RecordingEvent) { model.event(event) }
 
@@ -100,15 +121,7 @@ actor SessionModel {
             let (next, effect) = SessionReducer.reduce(state, event)
             if next != state { feed.publish(next) }
             return (next, effect)
-        }, handleEffect: { effect in
-            AsyncStream { events in
-                let task = Task {
-                    events.yield(await handler.handle(effect))
-                    events.finish()
-                }
-                events.onTermination = { _ in task.cancel() }
-            }
-        }, isolation: self)
+        }, handleEffect: { effect in oneEvent { await handler.handle(effect) } }, isolation: self)
     }
 
     func send(_ event: SessionEvent) { model?.event(event) }
@@ -129,14 +142,22 @@ actor SessionModel {
 @MainActor
 func quit(_ handler: LifecycleEffectHandler) async {
 
-    let model = ObservableModel(initialState: LifecycleState.running, reduce: LifecycleReducer.reduce, handleEffect: handler.handle)
+    let model = ObservableModel(initialState: LifecycleState.running, reduce: LifecycleReducer.reduce,
+                                handleEffect: { effect in oneEvent { await handler.handle(effect) } })
     model.event(.quit)
     for await state in Observations({ model.state }) where state == .terminated { break }
 }
 
 @MainActor
-func makeRecordings(handler: RecordingsEffectHandler) -> RecordingsInputs {
-    let model = ObservableModel(initialState: RecordingsState(), reduce: RecordingsReducer.reduce,
+func makeRecordings(handler: RecordingsEffectHandler, text: @escaping @Sendable () -> SettingsText, initial: RecordingsState = .init()) -> RecordingsInputs {
+    let model = ObservableModel(initialState: initial, reduce: recordingsReducer(text).reduce,
                                 handleEffect: { handleRecordingsEffect(handler, $0) })
     return RecordingsInputs(state: { model.state }, send: { model.event($0) })
+}
+
+/// The calls list machine, with its text in the language `text` gives when it writes.
+func recordingsReducer(_ text: @escaping @Sendable () -> SettingsText) -> RecordingsReducer {
+    RecordingsReducer(failureMessage: { prior, refreshError in
+        text()(.refreshFailed, prior, refreshError)
+    }, moveText: folderMoveText(text))
 }

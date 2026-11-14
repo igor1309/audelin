@@ -8,11 +8,11 @@ import Preferences
 import Recording
 import SessionRehearsal
 import Synchronization
+import SummaryRuntime
 import Testing
 
 /// Drives the public composition with real machines, UI models and files.
-@MainActor
-struct ComposeFixture {
+struct ComposeFixture: Sendable {
     let menu: AudelinMenu
     let root: URL
     let microphone: CaptureScript<CaptureBuffer>
@@ -23,14 +23,14 @@ struct ComposeFixture {
     let clock: FixtureClock
     let log: FixtureLog
 
-    static func make(
-        root: URL, preferences: Preferences? = nil,
+    @MainActor static func make(
+        root: URL, preferences: Preferences? = nil, summaryRuntime: SummaryRuntime.Runtime? = nil,
         microphoneFails: Bool = false, stopFailure: ComposerSide? = nil, stopEndsStream: Bool = true,
         rates: [Double]? = nil, recognizers: (any Recognizer, any Recognizer)? = nil,
-        configure: (inout ComposerBoundary) -> Void = { _ in },
-        openFolder: @escaping (URL) -> Bool = { _ in false }, presentCalls: @escaping () -> Void = {},
-        openURL: @escaping (URL) -> Void = { _ in }, presentPanel: @escaping (Bool) -> Void = { _ in },
-        terminate: @escaping @Sendable () async -> Void = {}
+        configure: @MainActor (inout ComposerBoundary) -> Void = { _ in },
+        openFolder: @escaping @MainActor (URL) -> Bool = { _ in false }, presentCalls: @escaping @MainActor () -> Void = {},
+        openURL: @escaping @MainActor (URL) -> Void = { _ in }, presentPanel: @escaping @MainActor (Bool) -> Void = { _ in },
+        terminate: @escaping @Sendable () async -> Void = {}, readCall: @escaping @MainActor () -> Void = {}
     ) async throws -> Self {
         let first = rates.map { Array(repeating: Float(0), count: Int($0[0] / 100)) }
         let last = rates.map { Array(repeating: Float(0), count: Int($0[1] / 100)) }
@@ -51,27 +51,36 @@ struct ComposeFixture {
             now: { Date(timeIntervalSince1970: 0) }, timeZone: { .gmt }, sleep: clock.sleep,
             intervals: testIntervals)
         boundary.time = clock.time
+        boundary.transcripts = FileTranscriptStorage(diarizer: .unavailable)
+        boundary.preferredLanguages = { ["ru-RU"] }
         boundary.log = log
+        boundary.trash = removeForTrash
         configure(&boundary)
         let preferencesURL = root.appendingPathComponent("preferences.json")
-        try await offPool {
+        do {
             try PreferencesStore(fileURL: preferencesURL).write(preferences ?? Preferences(automaticRecording: false, liveText: true, callsFolder: root))
         }
         let menu = await compose(boundary: boundary, preferencesURL: preferencesURL,
-            openCallsFolder: openFolder, presentCalls: presentCalls, openURL: openURL,
-            presentPanel: presentPanel, terminate: terminate)
+            openCallsFolder: { openFolder($0) }, presentCalls: { presentCalls() }, openURL: { openURL($0) },
+            presentPanel: { presentPanel($0) }, terminate: terminate, summaryRuntime: summaryRuntime, readCall: { readCall() })
         return Self(menu: menu, root: root, microphone: microphone, call: call, mine: mine, theirs: theirs,
                     selections: selections, clock: clock, log: log)
     }
 
-    func state(where matches: (RecordingState) -> Bool) async throws -> RecordingState {
+    func state(isolation: isolated (any Actor)? = #isolation, where matches: (RecordingState) -> Bool) async throws -> RecordingState {
         for await state in await menu.states() { if matches(state) { return state } }
         throw ScriptFailure.failed
     }
 
-    func panel(where matches: (PanelState) -> Bool) async throws -> PanelState {
+    func panel(isolation: isolated (any Actor)? = #isolation, where matches: (PanelState) -> Bool) async throws -> PanelState {
         for await state in await menu.panelStates() { if matches(state) { return state } }
         throw ScriptFailure.failed
+    }
+
+    /// The session itself has reduced the end. `RecordingState` reaches `.ending`
+    /// first, so it cannot order a held start after the end.
+    func sessionEnding(id: UInt64 = 1) async {
+        await log.wait { $0.category == .session && $0.message.hasPrefix("state id=\(id) phase=ending ") }
     }
 
     func start() async throws {
@@ -94,7 +103,7 @@ struct ComposeFixture {
 
 func transcriptText(of rig: ComposeFixture, folder: String = "1970.01.01-0000") async throws -> String {
     let url = rig.folder(folder).appendingPathComponent("transcript.md")
-    return try await offPool { try String(contentsOf: url, encoding: .utf8) }
+    return try String(contentsOf: url, encoding: .utf8)
 }
 
 /// A capture the test feeds itself, with no pieces but the ones it sends.
@@ -114,21 +123,21 @@ func entries(of state: PanelState) -> [PanelState.Entry] {
     if case let .lines(lines) = state.log { lines.entries } else { [] }
 }
 
-@MainActor
 func withComposition(
+    isolation: isolated (any Actor)? = #isolation,
     preferences: ((URL) -> Preferences)? = nil,
     microphoneFails: Bool = false, stopFailure: ComposerSide? = nil, stopEndsStream: Bool = true,
     rates: [Double]? = nil, recognizers: (any Recognizer, any Recognizer)? = nil,
-    configure: (inout ComposerBoundary) -> Void = { _ in },
-    openFolder: @escaping (URL) -> Bool = { _ in false }, presentCalls: @escaping () -> Void = {},
-    terminate: @escaping @Sendable () async -> Void = {},
-    _ body: @MainActor (ComposeFixture) async throws -> Void
+    configure: @MainActor (inout ComposerBoundary) -> Void = { _ in },
+    openFolder: @escaping @MainActor (URL) -> Bool = { _ in false }, presentCalls: @escaping @MainActor () -> Void = {},
+    terminate: @escaping @Sendable () async -> Void = {}, readCall: @escaping @MainActor () -> Void = {},
+    _ body: (ComposeFixture) async throws -> Void
 ) async throws {
     try await withComposeFolder { root in
         let fixture = try await ComposeFixture.make(root: root, preferences: preferences?(root),
             microphoneFails: microphoneFails, stopFailure: stopFailure, stopEndsStream: stopEndsStream,
             rates: rates, recognizers: recognizers, configure: configure,
-            openFolder: openFolder, presentCalls: presentCalls, terminate: terminate)
+            openFolder: openFolder, presentCalls: presentCalls, terminate: terminate, readCall: readCall)
         do { try await body(fixture); await fixture.finish() }
         catch { await fixture.finish(); throw error }
     }

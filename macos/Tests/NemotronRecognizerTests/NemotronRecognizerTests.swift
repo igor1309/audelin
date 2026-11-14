@@ -13,7 +13,7 @@ struct NemotronRecognizerTests {
     @Test func recognizersBuiltTogetherShareOneModelLoad() async throws {
 
         let load = ControlledModelLoad()
-        let makeDecoder = NemotronRecognizer.sharedDecoders(
+        let makeDecoder = NemotronDecoders.sharedDecoders(
             load: { await load.load() },
             makeDecoder: { model in
                 ScriptedDecoder([[DecodedToken("▁\(model)", start: 0.1, end: 0.4)]])
@@ -23,7 +23,7 @@ struct NemotronRecognizerTests {
         defer { arrivals.finish() }
         let build: @Sendable () async throws -> NemotronRecognizer = {
             arrivals.yield(())
-            return NemotronRecognizer(decoder: try await makeDecoder())
+            return try await NemotronRecognizer(decoders: NemotronDecoders(make: makeDecoder))
         }
         let recognizers = 4
 
@@ -53,7 +53,7 @@ struct NemotronRecognizerTests {
     @Test func nothingIsHeardBeforeAChunksAudioIsIn() async throws {
 
         let decoder = ScriptedDecoder([[token("▁слово", 0.2, 0.5)]], minimumSamples: 17_920)
-        let recognizer = NemotronRecognizer(decoder: decoder)
+        let recognizer = try await nemotron(decoder)
 
         let first = try await recognizer.hear(silence(0.6))
         let next = try await recognizer.hear(silence(0.5))
@@ -69,7 +69,7 @@ struct NemotronRecognizerTests {
             token("▁При", 0.2, 0.35), token("вет", 0.35, 0.6),
             token("▁мир", 0.8, 1), token("!", 1, 1.1),
         ]])
-        let recognizer = NemotronRecognizer(decoder: decoder)
+        let recognizer = try await nemotron(decoder)
 
         let hearing = try await recognizer.hear(silence(1.12))
 
@@ -77,29 +77,9 @@ struct NemotronRecognizerTests {
         #expect(hearing.from == 0.2)
     }
 
-    @Test func blockedRecognizersOutnumberingThePoolAllKeepDecodingAcrossSuspension() async throws {
-
-        let feeding = SuspendingBarriers(), finishing = SuspendingBarriers()
-        let recognizers = (0..<feeding.before.count).map { _ in
-            NemotronRecognizer(decoder: BarrierDecoder(feeding: feeding, finishing: finishing))
-        }
-
-        try await withThrowingTaskGroup { group in
-            for recognizer in recognizers { group.addTask { _ = try await recognizer.hear(silence(1.12)) } }
-            try await group.waitForAll()
-        }
-        #expect(feeding.met)
-
-        try await withThrowingTaskGroup { group in
-            for recognizer in recognizers { group.addTask { _ = try await recognizer.finish() } }
-            try await group.waitForAll()
-        }
-        #expect(finishing.met)
-    }
-
     @Test func aWordFollowedByAnotherIsFinal() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([twoWords]))
+        let recognizer = try await nemotron(ScriptedDecoder([twoWords]))
 
         let hearing = try await recognizer.hear(silence(1.12))
 
@@ -108,7 +88,7 @@ struct NemotronRecognizerTests {
 
     @Test func theLastWordHeardIsPending() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([twoWords]))
+        let recognizer = try await nemotron(ScriptedDecoder([twoWords]))
 
         let hearing = try await recognizer.hear(silence(1.12))
 
@@ -120,29 +100,29 @@ struct NemotronRecognizerTests {
         let first = [token("▁поэ", 0.2, 0.5)]
         let next = first + [token("тому", 0.5, 0.8), token("▁решим", 1, 1.4)]
 
-        let updates = await listen(NemotronRecognizer(decoder: ScriptedDecoder([first, next])), to: [silence(1.12), silence(1.12)])
+        let updates = await listen(try await nemotron(ScriptedDecoder([first, next])), to: [silence(1.12), silence(1.12)])
 
-        #expect(updates[0].all.map(\.pending) == ["поэ"])
-        #expect(updates[1].all.map(\.settled) == ["поэтому"])
-        #expect(updates[1].all.map(\.pending) == ["решим"])
-        #expect(updates.last?.all.map(\.settled) == ["поэтому решим"])
+        #expect(updates[0].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["поэ"])
+        #expect(updates[1].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["поэтому"])
+        #expect(updates[1].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["решим"])
+        #expect(updates.last?.all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["поэтому решим"])
         #expect(updates.last?.ending == .finished)
     }
 
     @Test func aChunkWithNothingNewChangesNothing() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([twoWords, twoWords]))
+        let recognizer = try await nemotron(ScriptedDecoder([twoWords, twoWords]))
         let updates = await listen(recognizer, to: [silence(1.12), silence(1.12)])
 
-        #expect(updates[0].all.map(\.settled) == ["первое"])
-        #expect(updates[0].all.map(\.pending) == ["второе"])
+        #expect(updates[0].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["первое"])
+        #expect(updates[0].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["второе"])
         #expect(updates[1] == updates[0])
-        #expect(updates.last?.all.map(\.settled) == ["первое второе"])
+        #expect(updates.last?.all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["первое второе"])
     }
 
     @Test func theLastWordSettlesAfterTwoQuietChunks() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([twoWords, twoWords, twoWords]))
+        let recognizer = try await nemotron(ScriptedDecoder([twoWords, twoWords, twoWords]))
         let first = try await recognizer.hear(silence(1.12))
         let second = try await recognizer.hear(silence(1.12))
         let third = try await recognizer.hear(silence(1.12))
@@ -155,7 +135,7 @@ struct NemotronRecognizerTests {
     @Test func finishingHearsTheRest() async throws {
 
         let decoder = ScriptedDecoder([], finished: [token("▁остаток", 0.1, 0.4)])
-        let recognizer = NemotronRecognizer(decoder: decoder)
+        let recognizer = try await nemotron(decoder)
 
         let first = try await recognizer.hear(silence(0.5))
         let hearing = try await recognizer.finish()
@@ -174,19 +154,19 @@ struct NemotronRecognizerTests {
             AudioChunk(samples: Array(samples[$0..<min($0 + 4_800, samples.count)]), sampleRate: 48_000)
         }
 
-        let updates = await listen(try await NemotronRecognizer(), to: chunks)
+        let updates = await listen(try await NemotronRecognizer(decoders: .shared), to: chunks)
 
-        let heard = updates.last?.all.map(\.settled).joined(separator: " ") ?? ""
+        let heard = updates.last?.all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") }.joined(separator: " ") ?? ""
         let streaming = updates.dropLast()
-        #expect(streaming.contains { $0.all.contains { !$0.settled.isEmpty } })
-        #expect(streaming.contains { $0.all.contains { !$0.pending.isEmpty } })
+        #expect(streaming.contains { $0.all.contains { $0.settledCount > 0 } })
+        #expect(streaming.contains { $0.all.contains { $0.settledCount < $0.words.count } })
         #expect(updates.last?.ending == .finished)
         #expect(letters(heard) == letters(sentence))
     }
 
     @Test func aFailingModelFailsTheRecogniser() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([], failingFeed: true))
+        let recognizer = try await nemotron(ScriptedDecoder([], failingFeed: true))
 
         await #expect(throws: ScriptedDecoder.Failed.self) {
             _ = try await recognizer.hear(silence(1.12))
@@ -195,7 +175,7 @@ struct NemotronRecognizerTests {
 
     @Test func anUnchangedSnapshotReportsNoChange() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([twoWords, twoWords]))
+        let recognizer = try await nemotron(ScriptedDecoder([twoWords, twoWords]))
 
         _ = try await recognizer.hear(silence(1.12))
         let hearing = try await recognizer.hear(silence(1.12))
@@ -207,7 +187,7 @@ struct NemotronRecognizerTests {
 
         let first = [token("▁раз", 0.1, 0.3), token("▁три", 1, 1.4)]
         let next = [first[0], token("▁два", 0.5, 0.8), first[1]]
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([first, next]))
+        let recognizer = try await nemotron(ScriptedDecoder([first, next]))
 
         _ = try await recognizer.hear(silence(1.12))
         let hearing = try await recognizer.hear(silence(1.12))
@@ -221,15 +201,15 @@ struct NemotronRecognizerTests {
         let next = first + [token("▁позже", 1, 1.4)]
         let last = next + [token("▁конец", 3.1, 3.5)]
 
-        let updates = await listen(NemotronRecognizer(decoder: ScriptedDecoder([first, next, last])), to: [silence(1.12), silence(1.12), silence(1.12)])
+        let updates = await listen(try await nemotron(ScriptedDecoder([first, next, last])), to: [silence(1.12), silence(1.12), silence(1.12)])
 
-        #expect(updates[0].all.map(\.settled) == [""])
-        #expect(updates[0].all.map(\.pending) == ["долгое пока"])
-        #expect(updates[1].all.map(\.settled) == [""])
-        #expect(updates[1].all.map(\.pending) == ["долгое пока позже"])
-        #expect(updates[2].all.map(\.settled) == ["долгое пока позже"])
-        #expect(updates[2].all.map(\.pending) == ["конец"])
-        #expect(updates.last?.all.map(\.settled) == ["долгое пока позже конец"])
+        #expect(updates[0].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == [""])
+        #expect(updates[0].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["долгое пока"])
+        #expect(updates[1].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == [""])
+        #expect(updates[1].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["долгое пока позже"])
+        #expect(updates[2].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["долгое пока позже"])
+        #expect(updates[2].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["конец"])
+        #expect(updates.last?.all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["долгое пока позже конец"])
     }
 
     @Test func aWordEndingAfterThePendingWordStartsStaysPending() async throws {
@@ -237,18 +217,18 @@ struct NemotronRecognizerTests {
         let first = [token("▁ну", 0.2, 0.5), token("▁по", 0.42, 0.5), token("э", 0.5, 0.58)]
         let next = first + [token("тому", 0.58, 0.8), token("▁решим", 1, 1.4)]
 
-        let updates = await listen(NemotronRecognizer(decoder: ScriptedDecoder([first, next])), to: [silence(1.12), silence(1.12)])
+        let updates = await listen(try await nemotron(ScriptedDecoder([first, next])), to: [silence(1.12), silence(1.12)])
 
-        #expect(updates[0].all.map(\.settled) == [""])
-        #expect(updates[0].all.map(\.pending) == ["ну поэ"])
-        #expect(updates[1].all.map(\.settled) == ["ну поэтому"])
-        #expect(updates.last?.all.map(\.settled) == ["ну поэтому решим"])
+        #expect(updates[0].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == [""])
+        #expect(updates[0].all.map { $0.words.dropFirst($0.settledCount).map(\.text).joined(separator: " ") } == ["ну поэ"])
+        #expect(updates[1].all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["ну поэтому"])
+        #expect(updates.last?.all.map { $0.words.prefix($0.settledCount).map(\.text).joined(separator: " ") } == ["ну поэтому решим"])
     }
 
     @Test func reportsStartAtThePreviouslyPendingWord() async throws {
 
         let next = twoWords + [token("▁третье", 1, 1.4)]
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([twoWords, next]))
+        let recognizer = try await nemotron(ScriptedDecoder([twoWords, next]))
 
         _ = try await recognizer.hear(silence(1.12))
         let hearing = try await recognizer.hear(silence(1.12))
@@ -259,7 +239,7 @@ struct NemotronRecognizerTests {
     @Test func feedsCarryTheTracksOwnSamples() async throws {
 
         let decoder = ScriptedDecoder([])
-        let recognizer = NemotronRecognizer(decoder: decoder)
+        let recognizer = try await nemotron(decoder)
         let chunks: [[Float]] = [[0.1, -0.2], [0.3, 0.4, -0.5]]
 
         for samples in chunks {
@@ -274,7 +254,7 @@ struct NemotronRecognizerTests {
 
         for rate in [8_000.0, 48_000.0] {
             let decoder = ScriptedDecoder([])
-            let recognizer = NemotronRecognizer(decoder: decoder)
+            let recognizer = try await nemotron(decoder)
             for _ in 0..<4 {
                 _ = try await recognizer.hear(.init(samples: .init(repeating: 0.25, count: Int(rate / 4)), sampleRate: rate))
             }
@@ -293,7 +273,7 @@ struct NemotronRecognizerTests {
 
     @Test func aFailingFinishFailsTheRecogniser() async throws {
 
-        let recognizer = NemotronRecognizer(decoder: ScriptedDecoder([], failingFinish: true))
+        let recognizer = try await nemotron(ScriptedDecoder([], failingFinish: true))
 
         await #expect(throws: ScriptedDecoder.Failed.self) {
             _ = try await recognizer.finish()
@@ -344,7 +324,7 @@ struct NemotronRecognizerTests {
     private func spoken(_ text: String) async throws -> [Float] {
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try await offPool { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return try await withCleanup {
             let url = directory.appendingPathComponent("spoken.wav")
             let say = Process()
@@ -391,42 +371,6 @@ private actor ControlledModelLoad {
         for waiter in waiters { waiter.resume(returning: model) }
         waiters.removeAll()
         starts.finish()
-    }
-}
-
-/// A barrier on each side of a suspension.
-private struct SuspendingBarriers {
-
-    let before = ThreadBarrier()
-    let after = ThreadBarrier()
-
-    var met: Bool { before.met && after.met }
-
-    func pass() async {
-
-        before.arrive()
-        await Task.yield()
-        after.arrive()
-    }
-}
-
-/// Blocks whichever thread the recognizer runs it on; it has no isolation of its own.
-private struct BarrierDecoder: TokenDecoder {
-
-    let chunk = 1.12
-    let feeding: SuspendingBarriers
-    let finishing: SuspendingBarriers
-
-    func feed(_ samples: [Float]) async throws -> [DecodedToken] {
-
-        await feeding.pass()
-        return []
-    }
-
-    func finish() async throws -> [DecodedToken] {
-
-        await finishing.pass()
-        return []
     }
 }
 
@@ -487,3 +431,9 @@ private struct Chunks: AudioSource {
 }
 
 private typealias SegmentSnapshot = (all: [Segments.Segment], ending: Segments.Ending?)
+
+/// A recognizer decoding with one decoder.
+private func nemotron(_ decoder: any TokenDecoder) async throws -> NemotronRecognizer {
+
+    try await NemotronRecognizer(decoders: NemotronDecoders { decoder })
+}

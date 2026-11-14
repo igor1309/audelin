@@ -23,11 +23,12 @@ struct BoundaryCompositionTests {
                 theirs: RehearsalRecognizer(SessionRecognizer(name: "unused")),
                 now: { Date(timeIntervalSince1970: 0) }, timeZone: { .gmt },
                 sleep: { _ in throw CancellationError() }, intervals: testIntervals)
+            boundary.transcripts = FileTranscriptStorage(diarizer: .unavailable)
             boundary.time = ComposerTime(now: { Date(timeIntervalSince1970: 0) }, timeZone: { .gmt },
                 monotonicNow: { 0 }, sleep: { _ in throw CancellationError() },
                 after: { _, _ in BoundaryCancellation {} }, ticks: { AsyncStream { $0.finish() } })
             let url = root.appendingPathComponent("preferences.json")
-            try await offPool {
+            do {
                 try PreferencesStore(fileURL: url).write(Preferences(automaticRecording: false, liveText: false, callsFolder: root))
             }
             let composition = await compose(boundary: boundary, preferencesURL: url,

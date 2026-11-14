@@ -49,8 +49,16 @@ public struct GlassLedger: Equatable, Sendable {
     public let space8: CGFloat
     public let space12: CGFloat
     public let space16: CGFloat
+    public let space20: CGFloat
     public let space24: CGFloat
+    public let space28: CGFloat
     public let space40: CGFloat
+    public let lineBody: CGFloat
+    public let them2: Color
+    public let them3: Color
+    public let them4: Color
+    public let hit: Color
+    public let space32: CGFloat
 
     public static let light = GlassLedger(
         glass: .hex(0xFFFFFF, 0xE6),
@@ -95,8 +103,16 @@ public struct GlassLedger: Equatable, Sendable {
         space8: 8,
         space12: 12,
         space16: 16,
+        space20: 20,
         space24: 24,
-        space40: 40
+        space28: 28,
+        space40: 40,
+        lineBody: 20,
+        them2: .hex(0x6E56CF, 0xFF),
+        them3: .hex(0x2F6FDB, 0xFF),
+        them4: .hex(0xC2417F, 0xFF),
+        hit: .hex(0xFFD84D, 0x8C),
+        space32: 32
     )
 
     public static let dark = GlassLedger(
@@ -142,7 +158,15 @@ public struct GlassLedger: Equatable, Sendable {
         space8: 8,
         space12: 12,
         space16: 16,
+        space20: 20,
         space24: 24,
-        space40: 40
+        space28: 28,
+        space40: 40,
+        lineBody: 20,
+        them2: .hex(0xB4A2FF, 0xFF),
+        them3: .hex(0x82AAFF, 0xFF),
+        them4: .hex(0xF28CC0, 0xFF),
+        hit: .hex(0xE0B020, 0x7A),
+        space32: 32
     )
 }

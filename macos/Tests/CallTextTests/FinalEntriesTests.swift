@@ -1,6 +1,5 @@
-import Synchronization
 import Testing
-@testable import CallText
+import CallText
 
 @Suite(.timeLimit(.minutes(1)))
 struct FinalEntriesTests {
@@ -62,8 +61,8 @@ struct FinalEntriesTests {
         await call.stop()
     }
 
-    @Test(arguments: [SideState.Status.finished, .failed("ended")])
-    func anEndedSideReleasesItsBound(status: SideState.Status) async {
+    @Test(arguments: [SideState<Text>.Status.finished, .failed("ended")])
+    func anEndedSideReleasesItsBound(status: SideState<Text>.Status) async {
 
         let mine = FinalSide(), theirs = FinalSide()
         let call = CallText(microphone: mine, call: theirs)
@@ -90,8 +89,8 @@ struct FinalEntriesTests {
         await call.stop()
     }
 
-    @Test(arguments: [State.Speaker.mine, .theirs])
-    func listenReturningAlonePublishesTheOtherSidesFinalPrefix(ending: State.Speaker) async {
+    @Test(arguments: [State<Text>.Speaker.mine, .theirs])
+    func listenReturningAlonePublishesTheOtherSidesFinalPrefix(ending: State<Text>.Speaker) async {
 
         let mine = FinalSide(), theirs = FinalSide()
         let call = CallText(microphone: mine, call: theirs)
@@ -187,10 +186,10 @@ struct FinalEntriesTests {
     }
 
     @Test(arguments: [20, 800, 6_000])
-    func newestEntrySortWorkDoesNotGrowWithTheFinalPrefix(count: Int) async {
+    func newestEntryRevisionsKeepTheFinalPrefix(count: Int) async {
 
-        let mine = FinalSide(), theirs = FinalSide(), work = SortedWork()
-        let call = CallText(microphone: mine, call: theirs, sortedEntry: { work.record($0) })
+        let mine = FinalSide(), theirs = FinalSide()
+        let call = CallText(microphone: mine, call: theirs)
         await call.start()
         let myFinals = (0..<count / 2).map { word($0, start: Double($0 * 2), end: Double($0 * 2 + 2)) }
         let theirFinals = (0..<count / 2).map { word($0, start: Double($0 * 2 + 1), end: Double($0 * 2 + 3)) }
@@ -200,7 +199,6 @@ struct FinalEntriesTests {
         let first = await call.state
         #expect(first.finalCount == count)
         #expect(CallOutput(first).entries == ordered(myFinals, theirFinals, myTail: [myTail], theirTail: [word(count / 2, start: Double(count + 1))]))
-        _ = work.take()
 
         // Retain every snapshot, as an unread stream or a slow reader does.
         var retained = [first]
@@ -208,7 +206,6 @@ struct FinalEntriesTests {
             let newest = word(count / 2, start: Double(count + 1), pending: "revision\(revision)")
             await theirs.send(final: theirFinals, tail: [newest])
             let next = await call.state
-            #expect(work.take() == [myTail.text, newest.text])
             #expect(next.finalCount == count)
             #expect(Array(next.entries.prefix(count)) == Array(first.entries.prefix(count)))
             #expect(next.entries.last?.text == newest.text)
@@ -219,19 +216,19 @@ struct FinalEntriesTests {
         let nextTail = word(count / 2 + 1, start: Double(count + 2))
         await mine.send(final: myFinals + [final], tail: [nextTail])
         #expect(await call.state.finalCount == count + 1)
-        #expect(work.take() == [final.text, nextTail.text, retained.last!.entries.last!.text])
+        #expect(await call.state.entries.last?.text == nextTail.text)
         #expect(retained.first == first)
         await call.stop()
     }
 }
 
-private func word(_ id: Int, start: Double? = nil, end: Double? = nil, pending: String = "", later: Bool = false) -> SideState.Entry {
+private func word(_ id: Int, start: Double? = nil, end: Double? = nil, pending: String = "", later: Bool = false) -> SideState<Text>.Entry {
 
     let start = start ?? Double(id)
     return .init(text: .init(id: id, start: start, end: end ?? start + 1, settled: pending.isEmpty ? "word\(id)" : "", pending: pending), writtenLater: later)
 }
 
-private func ordered(_ mine: [SideState.Entry], _ theirs: [SideState.Entry], myTail: [SideState.Entry] = [], theirTail: [SideState.Entry] = []) -> [CallOutput.Entry] {
+private func ordered(_ mine: [SideState<Text>.Entry], _ theirs: [SideState<Text>.Entry], myTail: [SideState<Text>.Entry] = [], theirTail: [SideState<Text>.Entry] = []) -> [CallOutput.Entry] {
 
     let mine = (mine + myTail).map { CallOutput.Entry(speaker: .mine, text: $0.text, writtenLater: $0.writtenLater) }
     let theirs = (theirs + theirTail).map { CallOutput.Entry(speaker: .theirs, text: $0.text, writtenLater: $0.writtenLater) }
@@ -245,32 +242,18 @@ private func storage<T>(_ entries: [T]) -> UInt {
     entries.withUnsafeBufferPointer { UInt(bitPattern: $0.baseAddress) }
 }
 
-private final class SortedWork: Sendable {
-
-    private let entries = Mutex<[Text]>([])
-
-    func record(_ entry: State.Entry) { entries.withLock { $0.append(entry.text) } }
-
-    func take() -> [Text] {
-
-        entries.withLock { value in
-            defer { value = [] }
-            return value
-        }
-    }
-}
 
 private actor FinalSide: Side {
 
     private struct Delivery {
-        let state: SideState
+        let state: SideState<Text>
         let received: CheckedContinuation<Void, Never>
     }
 
     private let deliveries = AsyncStream<Delivery>.makeStream()
-    private var state = SideState(status: .listening, entries: [])
+    private var state = SideState<Text>(status: .listening, entries: [])
 
-    func listen(_ receive: @escaping @Sendable (SideState) async -> Void) async {
+    func listen(_ receive: @escaping @Sendable (SideState<Text>) async -> Void) async {
 
         for await delivery in deliveries.stream {
             await receive(delivery.state)
@@ -289,7 +272,7 @@ private actor FinalSide: Side {
     }
 
     func send(
-        final: [SideState.Entry], tail: [SideState.Entry], status: SideState.Status = .listening,
+        final: [SideState<Text>.Entry], tail: [SideState<Text>.Entry], status: SideState<Text>.Status = .listening,
         noTextBefore: Double? = nil
     ) async {
 

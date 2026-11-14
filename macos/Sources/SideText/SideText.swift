@@ -1,19 +1,14 @@
 /// Reads one side through its live audio, retained live text and filling in.
-public actor SideText {
+public actor SideText<Text: Segment> {
 
     /// Latest snapshots, replacing unread ones, until text ends.
-    public nonisolated let updates: AsyncStream<State>
-    public private(set) var state = State(status: .off, entries: [])
+    public nonisolated let updates: AsyncStream<State<Text>>
+    public private(set) var state = State<Text>(status: .off, entries: [])
 
-    private let continuation: AsyncStream<State>.Continuation
+    private let continuation: AsyncStream<State<Text>>.Continuation
     private let audio: any LiveAudio
-    private let text: any LiveText
-    private let makeFillIn: @Sendable () -> any FillingIn
-    private let inputQueued: @Sendable () -> Void
-    private let audioEndReceived: @Sendable () -> Void
-    private let stopRequested: @Sendable () -> Void
-    private let identifiedEntry: @Sendable (Text) -> Void
-    private let shownEntry: @Sendable (Text) -> Void
+    private let text: any LiveText<Text>
+    private let makeFillIn: @Sendable () -> any FillingIn<Text>
     private var listener: Task<Void, Never>?
     private var operation: Task<Void, Never>?
     private var enabled = false
@@ -22,7 +17,7 @@ public actor SideText {
     private var stopping = false
     private var sourceEnded = false
     private var endWaiters: [CheckedContinuation<Void, Never>] = []
-    private var fills: [Int: any FillingIn] = [:]
+    private var fills: [Int: any FillingIn<Text>] = [:]
     private var generation = 0
     private var heardThrough = 0.0
     private var sampleRate = 1.0
@@ -39,34 +34,13 @@ public actor SideText {
 
     /// Each activation gets its own filling-in run, using the same live text.
     public init(
-        audio: any LiveAudio, text: any LiveText,
-        fillIn: @escaping @Sendable () -> any FillingIn
-    ) {
-
-        self.init(
-            audio: audio, text: text, fillIn: fillIn,
-            inputQueued: {}, audioEndReceived: {}, stopRequested: {}
-        )
-    }
-
-    init(
-        audio: any LiveAudio, text: any LiveText,
-        fillIn: @escaping @Sendable () -> any FillingIn,
-        inputQueued: @escaping @Sendable () -> Void,
-        audioEndReceived: @escaping @Sendable () -> Void,
-        stopRequested: @escaping @Sendable () -> Void,
-        identifiedEntry: @escaping @Sendable (Text) -> Void = { _ in },
-        shownEntry: @escaping @Sendable (Text) -> Void = { _ in }
+        audio: any LiveAudio, text: any LiveText<Text>,
+        fillIn: @escaping @Sendable () -> any FillingIn<Text>
     ) {
 
         self.audio = audio
         self.text = text
         makeFillIn = fillIn
-        self.inputQueued = inputQueued
-        self.audioEndReceived = audioEndReceived
-        self.stopRequested = stopRequested
-        self.identifiedEntry = identifiedEntry
-        self.shownEntry = shownEntry
         (updates, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
@@ -104,7 +78,6 @@ public actor SideText {
     public func stop() async {
 
         stopping = true
-        stopRequested()
         if !ending, !fills.isEmpty || listener == nil {
             await end(.finished)
         } else {
@@ -138,7 +111,7 @@ public actor SideText {
         enabled && !ending && turn == generation
     }
 
-    private func fillIn(_ run: any FillingIn, turn: Int) async {
+    private func fillIn(_ run: any FillingIn<Text>, turn: Int) async {
 
         defer { fills[turn] = nil }
         guard current(turn) else { return }
@@ -155,7 +128,7 @@ public actor SideText {
         }
     }
 
-    private func filled(_ progress: FilledText, turn: Int) {
+    private func filled(_ progress: FilledText<Text>, turn: Int) {
 
         // A run can finish consuming audio after switching off. Its cursor
         // still belongs to the retained engine, but its text stays hidden.
@@ -177,7 +150,6 @@ public actor SideText {
             await self?.hear(chunk, turn: turn)
         }
         operation = next
-        inputQueued()
         await next.value
     }
 
@@ -216,7 +188,6 @@ public actor SideText {
     private func audioEnded() async {
 
         sourceEnded = true
-        audioEndReceived()
         guard !ending else { return }
         if !enabled {
             await end(.finished)
@@ -236,13 +207,13 @@ public actor SideText {
         }
     }
 
-    private func fail(_ failure: State.Failure, turn: Int) async {
+    private func fail(_ failure: State<Text>.Failure, turn: Int) async {
 
         guard current(turn) else { return }
         await end(.failed(failure))
     }
 
-    private func end(_ status: State.Status) async {
+    private func end(_ status: State<Text>.Status) async {
 
         guard !ending else {
             await waitUntilEnded()
@@ -284,16 +255,15 @@ public actor SideText {
         shownThrough = heardThrough
     }
 
-    private func entry(_ segment: Text) -> State.Entry {
+    private func entry(_ segment: Text) -> State<Text>.Entry {
 
-        shownEntry(segment)
-        return State.Entry(text: segment, writtenLater: later.contains {
+        return State<Text>.Entry(text: segment, writtenLater: later.contains {
             ((segment.end - $0.lowerBound) * sampleRate).rounded() > 0
                 && (($0.upperBound - segment.start) * sampleRate).rounded() > 0
         })
     }
 
-    private func accept(_ update: TextUpdate) {
+    private func accept(_ update: TextUpdate<Text>) {
 
         pendingFinal.append(contentsOf: update.final.dropFirst(acceptedFinalCount).map(identify))
         acceptedFinalCount = update.final.count
@@ -318,15 +288,12 @@ public actor SideText {
 
     private func identify(_ text: Text) -> Text {
 
-        identifiedEntry(text)
         let id = shownIDs[text.id] ?? (text.id > highestID ? text.id : highestID + 1)
         highestID = max(highestID, id)
-        return Text(id: id, start: text.start, end: text.end, settled: text.settled, pending: text.pending)
+        return text.identified(as: id)
     }
 
     private func publish() { continuation.yield(state) }
-
-    func waitForAudioEnd() async { await listener?.value }
 
     deinit {
 

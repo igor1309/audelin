@@ -1,6 +1,5 @@
 import BlockingTestWork
 import AVFAudio
-import struct CallText.State
 import Foundation
 import LiveText
 import Session
@@ -13,7 +12,6 @@ import PanelUI
 /// A piece that fails partway through a long call: the user hears of it,
 /// once rather than for every word that follows, and the recording goes on.
 @Suite(.timeLimit(.minutes(1)))
-@MainActor
 struct LongCallFaultTests {
 
     /// When one side's text fails, the panel says so, the recording goes on
@@ -44,7 +42,7 @@ struct LongCallFaultTests {
             // The rig's scripted captures add one piece at start and one at stop.
             #expect(try await recordedFrames(folder.appendingPathComponent("microphone.caf")) == micSent + 3)
             #expect(try await recordedFrames(folder.appendingPathComponent("call.caf")) == callSent + 3)
-            let transcript = try await offPool { try String(contentsOf: folder.appendingPathComponent("transcript.md"), encoding: .utf8) }
+            let transcript = try String(contentsOf: folder.appendingPathComponent("transcript.md"), encoding: .utf8)
             let words = { (side: String) in
                 tokens(transcript).filter { $0.hasPrefix(side) && $0.dropFirst(side.count).allSatisfy(\.isNumber) }
             }
@@ -85,5 +83,5 @@ private actor FailingRecognizer: Recognizer {
 
 private func recordedFrames(_ url: URL) async throws -> Int {
 
-    try await offPool { Int(try AVAudioFile(forReading: url).length) }
+    try Int(try AVAudioFile(forReading: url).length)
 }

@@ -9,10 +9,10 @@ struct ParakeetReaderTests {
 
     @Test func capturedParakeetTokensBecomeWordsWithTheirOriginalTimings() async throws {
 
-        let timings: [TokenTiming] = try await offPool {
+        let timings: [TokenTiming] = try {
             let url = try #require(Bundle.module.url(forResource: "diff-means-parakeet-v3", withExtension: "json", subdirectory: "Fixtures"))
             return try JSONDecoder().decode([TokenTiming].self, from: Data(contentsOf: url))
-        }
+        }()
         let reader = ParakeetReader(transcribe: { _, _ in timings })
 
         let words = try await read(reader, samples: .init(repeating: 0, count: 88_000))
@@ -113,9 +113,7 @@ struct ParakeetReaderTests {
 
     private func read(_ reader: ParakeetReader, samples: [Float]) async throws -> [WindowWord] {
 
-        try await withTaskExecutorPreference(DispatchSerialQueue(label: "test.ParakeetReader")) {
-            try await reader.read(samples)
-        }
+        try await reader.read(samples)
     }
 }
 

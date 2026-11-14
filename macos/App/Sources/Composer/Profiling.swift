@@ -1,4 +1,3 @@
-import struct CallText.State
 import LiveText
 import Reading
 
@@ -31,14 +30,20 @@ struct SignpostedTranscriptFile: SessionTranscriptFile {
     let base: any SessionTranscriptFile
     let intervals: ProfileIntervals
 
-    func write(_ state: State) async throws {
+    func write(_ state: CallState) async throws {
 
         let end = intervals.begin("TranscriptWrite")
         defer { end() }
         try await base.write(state)
     }
 
+    func replaceMicrophone(in state: CallState, with segments: [TranscriptSegment]) async throws {
+        try await base.replaceMicrophone(in: state, with: segments)
+    }
+
     func close() async { await base.close() }
+
+    func attributeSpeakers() async -> Transcript.Attributed? { await base.attributeSpeakers() }
 }
 
 struct SignpostedRecognizer: Recognizer {

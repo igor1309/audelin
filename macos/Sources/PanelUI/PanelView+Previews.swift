@@ -2,24 +2,36 @@ import SwiftUI
 
 extension PanelState {
 
-    /// One state per design frame, named after it.
-    static let previews: [(name: String, state: PanelState)] = [
-        ("not-recording", .notRecording),
-        ("recording", .recording),
-        ("preparing", .preparing),
-        ("live-text-off", .liveTextOff),
-        ("switched-off-mid-call", .switchedOffMidCall),
-        ("text-filled-in", .textFilledIn),
-        ("settling-0s", .settling0),
-        ("settling-4s", .settling4),
-        ("settling-8s", .settling8),
-        ("selection-held", .selectionHeld),
-        ("long-selection-held", .longSelectionHeld),
-        ("no-call-audio", .problem(.callAudio, gap: .init(speaker: .them, text: "— нет звука звонка с 12:45 —"))),
-        ("no-microphone", .problem(.microphone, gap: .init(speaker: .me, text: "— нет микрофона с 12:45 —"))),
-        ("disk-full", .problem(.diskFull(savedUntil: "12:45"), gap: .init(speaker: .them, text: "— диск заполнен с 12:45 —"))),
-        ("call-silent", .problem(.callSilent)),
-    ]
+    /// One state per design frame, named after it, with the Russian text.
+    static let previews = previews(in: PanelText(language: .russian))
+
+    /// One state per design frame, named after it, with the panel's fixed text in the given language.
+    static func previews(in text: PanelText) -> [(name: String, state: PanelState)] {
+
+        func gap(_ speaker: Speaker, _ phrase: PanelPhrase) -> Gap {
+            .init(speaker: speaker, text: String(format: text(phrase), "12:45"))
+        }
+        return [
+            ("not-recording", .notRecording),
+            ("recording", .recording),
+            ("preparing", .preparing),
+            ("live-text-off", .liveTextOff),
+            ("switched-off-mid-call", .switchedOffMidCall),
+            ("text-filled-in", .textFilledIn),
+            ("settling-0s", .settling0),
+            ("settling-4s", .settling4),
+            ("settling-8s", .settling8),
+            ("selection-held", .selectionHeld),
+            ("long-selection-held", .longSelectionHeld),
+            ("no-call-audio", .problem(.callAudioPreview(text), gap: gap(.them, .gapCallAudio))),
+            ("no-microphone", .problem(.microphonePreview(text), gap: gap(.me, .gapMicrophone))),
+            ("disk-full", .problem(.diskFullPreview(text), gap: gap(.them, .gapDiskFull))),
+            ("call-silent", .problem(.callSilentPreview(text))),
+            ("one-remote-speaker", .oneRemoteSpeaker),
+            ("two-remote-speakers", .twoRemoteSpeakers),
+            ("several-remote-speakers", .severalRemoteSpeakers),
+        ]
+    }
 
     static let notRecording = PanelState(recording: .off, log: .empty)
 
@@ -58,6 +70,39 @@ extension PanelState {
                 .init(id: 2, time: "12:32", speaker: .me, settled: "Да, и сразу по слог — кто дежурит."),
             ])),
             .entry(.init(id: 3, time: "12:34", speaker: .them, settled: "Окей. Тогда RACI соберём сегодня.")),
+        ]))
+    )
+
+    /// After the call, a lone remote speaker stays plain Them.
+    static let oneRemoteSpeaker = PanelState(
+        recording: .off,
+        log: .lines(.init(entries: [
+            .init(id: 1, time: "12:41", speaker: .them, settled: "Всем привет. Начнём с ролей по запуску."),
+            .init(id: 2, time: "12:42", speaker: .me, settled: "Accountable — я. По слог отвечает команда Ильи."),
+            .init(id: 3, time: "12:44", speaker: .them, settled: "Окей. Тогда ОКР на квартал."),
+        ]))
+    )
+
+    static let twoRemoteSpeakers = PanelState(
+        recording: .off,
+        log: .lines(.init(entries: [
+            .init(id: 1, time: "12:41", speaker: .them, settled: "Всем привет. Начнём с ролей по запуску.", label: "Анна", remoteSpeaker: 1),
+            .init(id: 2, time: "12:42", speaker: .them, settled: "Я бы сначала обсудил сроки.", label: "Собеседник 2", remoteSpeaker: 2),
+            .init(id: 3, time: "12:43", speaker: .me, settled: "Accountable — я. По слог отвечает команда Ильи."),
+            .init(id: 4, time: "12:44", speaker: .them, settled: "Окей. Тогда ОКР на квартал.", label: "Анна", remoteSpeaker: 1),
+        ]))
+    )
+
+    /// Five speakers: the fifth takes the first one's colour again.
+    static let severalRemoteSpeakers = PanelState(
+        recording: .off,
+        log: .lines(.init(entries: [
+            .init(id: 1, time: "12:41", speaker: .them, settled: "Начнём с ролей.", label: "Анна", remoteSpeaker: 1),
+            .init(id: 2, time: "12:42", speaker: .them, settled: "Сроки — до пятницы.", label: "Борис", remoteSpeaker: 2),
+            .init(id: 3, time: "12:43", speaker: .them, settled: "Дежурит наша команда.", label: "Собеседник 3", remoteSpeaker: 3),
+            .init(id: 4, time: "12:44", speaker: .them, settled: "Метрики соберу я.", label: "Собеседник 4", remoteSpeaker: 4),
+            .init(id: 5, time: "12:45", speaker: .them, settled: "А дашборд кто?", label: "Собеседник 5", remoteSpeaker: 5),
+            .init(id: 6, time: "12:46", speaker: .me, settled: "Дашборд — на мне."),
         ]))
     )
 
@@ -118,10 +163,11 @@ struct PanelPreview: View {
     let state: PanelState
     let scheme: ColorScheme
     var config: PanelConfig = .glassLedger
+    var text = PanelText(language: .russian)
 
     var body: some View {
 
-        PanelView(state: state, event: { _ in }, config: config)
+        PanelView(state: state, event: { _ in }, config: config, text: text)
             .padding(config.tokens(for: scheme).space24)
             .background(config.tokens(for: scheme).back)
             .environment(\.colorScheme, scheme)
@@ -159,6 +205,39 @@ struct PanelPreview: View {
         VStack {
             ForEach(Array(PanelState.previews.suffix(4).enumerated()), id: \.offset) { _, preview in
                 PanelPreview(state: preview.state, scheme: .dark)
+            }
+        }
+    }
+}
+
+extension PanelState.Banner {
+
+    static func callAudioPreview(_ text: PanelText) -> Self {
+        .init(kind: .callAudio, title: text(.callAudioTitle), line: text(.callAudioLine),
+              button: text(.openSettings), action: .openSettings(.systemAudioRecording))
+    }
+
+    static func microphonePreview(_ text: PanelText) -> Self {
+        .init(kind: .microphone, title: text(.microphoneTitle), line: text(.microphoneLine),
+              button: text(.openSettings), action: .openSettings(.microphone))
+    }
+
+    static func diskFullPreview(_ text: PanelText) -> Self {
+        .init(kind: .diskFull, title: text(.diskFullTitle), line: String(format: text(.diskFullLine), "12:45"),
+              button: text(.openFolder), action: .openCallsFolder)
+    }
+
+    static func callSilentPreview(_ text: PanelText) -> Self {
+        .init(kind: .callSilent, title: text(.callSilentTitle), line: text(.callSilentLine),
+              button: text(.openSettings), action: .openSettings(.systemAudioRecording))
+    }
+}
+
+#Preview("Recording problems, English") {
+    ScrollView {
+        VStack {
+            ForEach(PanelState.previews(in: PanelText(language: .english)).suffix(4), id: \.name) { preview in
+                PanelPreview(state: preview.state, scheme: .light, text: PanelText(language: .english))
             }
         }
     }

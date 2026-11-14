@@ -3,14 +3,30 @@ import PackageDescription
 
 let package = Package(
     name: "Audelin",
+    defaultLocalization: "ru",
     platforms: [.macOS(.v26)],
     products: [
+        .library(name: "SummarySettings", targets: ["SummarySettings"]),
+        .library(name: "SummaryJobs", targets: ["SummaryJobs"]),
+        .library(name: "SummaryFiles", targets: ["SummaryFiles"]),
+        .library(name: "SummaryRuntime", targets: ["SummaryRuntime"]),
+        .library(name: "BleedCleanup", targets: ["BleedCleanup"]),
+        .library(name: "SpeakerIdentification", targets: ["SpeakerIdentification"]),
+        .library(name: "SpeakerNaming", targets: ["SpeakerNaming"]),
+        .library(name: "CallObservation", targets: ["CallObservation"]),
+        .library(name: "ZoomAccessibility", targets: ["ZoomAccessibility"]),
+        .library(name: "BrowserBridge", targets: ["BrowserBridge"]),
+        .library(name: "CallDiarizer", targets: ["CallDiarizer"]),
+        .library(name: "SpeakerAttribution", targets: ["SpeakerAttribution"]),
+
         .library(name: "BlockingTestWork", targets: ["BlockingTestWork"]),
         .library(name: "SplitRows", targets: ["SplitRows"]),
         .library(name: "Lifecycle", targets: ["Lifecycle"]),
+        .library(name: "CallNotes", targets: ["CallNotes"]),
         .library(name: "Calls", targets: ["Calls"]),
         .library(name: "Recordings", targets: ["Recordings"]),
         .library(name: "CallsListUI", targets: ["CallsListUI"]),
+        .library(name: "CallsSearch", targets: ["CallsSearch"]),
         .library(name: "CallAudioProbe", targets: ["CallAudioProbe"]),
         .library(name: "CallAudioAccess", targets: ["CallAudioAccess"]),
         .library(name: "CallAppProcesses", targets: ["CallAppProcesses"]),
@@ -21,6 +37,9 @@ let package = Package(
         .library(name: "CoreAudioProcessBinding", targets: ["CoreAudioProcessBinding"]),
         .library(name: "FillIn", targets: ["FillIn"]),
         .library(name: "GlassLedger", targets: ["GlassLedger"]),
+        .library(name: "NotesMarkdown", targets: ["NotesMarkdown"]),
+        .library(name: "SummaryPreviewUI", targets: ["SummaryPreviewUI"]),
+        .library(name: "CallsWindowUI", targets: ["CallsWindowUI"]),
         .library(name: "LiveAudio", targets: ["LiveAudio"]),
         .library(name: "LiveText", targets: ["LiveText"]),
         .library(name: "MenuBar", targets: ["MenuBar"]),
@@ -37,21 +56,60 @@ let package = Package(
         .library(name: "SideText", targets: ["SideText"]),
         .library(name: "SystemAudioCapture", targets: ["SystemAudioCapture"]),
         .library(name: "TrackFile", targets: ["TrackFile"]),
+        .library(name: "TranscriptFormat", targets: ["TranscriptFormat"]),
         .library(name: "TranscriptFile", targets: ["TranscriptFile"]),
+        .library(name: "SavePacing", targets: ["SavePacing"]),
         .library(name: "TranscriptWriting", targets: ["TranscriptWriting"]),
         .library(name: "TwoPassRecognizer", targets: ["TwoPassRecognizer"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7"),
+        // Trimmed copy of FluidAudio 0.17.7: audelin/scripts/vendor-fluidaudio.sh.
+        .package(path: "Vendor/FluidAudio"),
+        // Apache-2.0, with cmark-gfm under BSD-2: notices in audelin/THIRD-PARTY-NOTICES.md.
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.6.0"),
     ],
     targets: [
+        .target(name: "SummarySettings"),
+        .testTarget(name: "SummarySettingsTests", dependencies: ["SummarySettings", "BlockingTestWork"]),
+        .target(name: "SummaryJobs"),
+        .testTarget(name: "SummaryJobsTests", dependencies: ["SummaryJobs", "BlockingTestWork"]),
+        .target(name: "SummaryFiles"),
+        .testTarget(name: "SummaryFilesTests", dependencies: ["SummaryFiles", "BlockingTestWork"]),
+        .target(name: "SummaryRuntime"),
+        .testTarget(name: "SummaryRuntimeTests", dependencies: ["SummaryRuntime", "BlockingTestWork"]),
+        .target(name: "SpeakerAttribution"),
+        .testTarget(name: "SpeakerAttributionTests", dependencies: ["SpeakerAttribution"]),
+        .target(name: "BleedCleanup"),
+        .testTarget(name: "BleedCleanupTests", dependencies: ["BleedCleanup"]),
+        .target(name: "SpeakerIdentification"),
+        .testTarget(name: "SpeakerIdentificationTests", dependencies: ["SpeakerIdentification", "BlockingTestWork"]),
+        .target(name: "SpeakerNaming"),
+        .testTarget(name: "SpeakerNamingTests", dependencies: ["SpeakerNaming"]),
+        .target(name: "CallObservation"),
+        .testTarget(name: "CallObservationTests", dependencies: ["CallObservation"]),
+        .target(name: "ZoomAccessibility"),
+        .target(name: "CallDiarizer", dependencies: ["AudioConversion", "ModelLoading", .product(name: "FluidAudio", package: "FluidAudio")]),
+        .testTarget(name: "CallDiarizerTests", dependencies: ["CallDiarizer", "BlockingTestWork"]),
+        .testTarget(name: "ZoomAccessibilityTests", dependencies: ["ZoomAccessibility"], resources: [.copy("Fixtures")]),
+        .target(name: "BrowserBridge", dependencies: ["CallObservation"]),
+        .executableTarget(name: "AudelinNativeHost", dependencies: ["BrowserBridge"]),
+        .testTarget(name: "BrowserBridgeTests", dependencies: ["BrowserBridge", "CallObservation"], resources: [.copy("Fixtures")]),
+
         .testTarget(name: "SourceChecksTests", dependencies: ["BlockingTestWork"]),
         .target(name: "Calls", dependencies: ["CallFolderName"]),
+        .target(name: "CallsSearch"),
         .target(name: "Recordings"),
-        .target(name: "CallsListUI", dependencies: ["GlassLedger"]),
+        .target(name: "CallsListUI", dependencies: ["GlassLedger"], resources: [.process("Resources")]),
+        .target(name: "NotesMarkdown", dependencies: [.product(name: "Markdown", package: "swift-markdown")]),
+        .testTarget(name: "NotesMarkdownTests", dependencies: ["NotesMarkdown"]),
+        .target(name: "SummaryPreviewUI", dependencies: ["GlassLedger"], resources: [.process("Resources")]),
+        .target(name: "CallsWindowUI", dependencies: ["GlassLedger", "NotesMarkdown", "SummaryPreviewUI"]),
+        .testTarget(name: "CallsWindowUITests", dependencies: ["CallsWindowUI", "SummaryPreviewUI"]),
+        .testTarget(name: "SummaryPreviewUITests", dependencies: ["SummaryPreviewUI", "GlassLedger", "NotesMarkdown", "RenderedText"]),
+        .testTarget(name: "CallsSearchTests", dependencies: ["CallsSearch"]),
         .testTarget(name: "CallsTests", dependencies: ["Calls", "TrackFile", "BlockingTestWork"]),
         .testTarget(name: "RecordingsTests", dependencies: ["Recordings"]),
-        .testTarget(name: "CallsListUITests", dependencies: ["CallsListUI", "RenderedText", "BlockingTestWork"]),
+        .testTarget(name: "CallsListUITests", dependencies: ["CallsListUI", "GlassLedger", "RenderedText"]),
         .target(name: "CallAudioProbe"),
         .target(name: "CallAudioAccess"),
         .testTarget(name: "CallAudioProbeTests", dependencies: ["CallAudioProbe", "BlockingTestWork"]),
@@ -92,13 +150,17 @@ let package = Package(
             name: "Lifecycle"
         ),
         .target(
+            name: "CallNotes"
+        ),
+        .target(
             name: "LiveAudio"
         ),
         .target(
             name: "LiveText"
         ),
         .target(
-            name: "MenuBar"
+            name: "MenuBar",
+            resources: [.process("Resources")]
         ),
         .target(
             name: "MicrophoneCapture"
@@ -117,7 +179,8 @@ let package = Package(
         ),
         .target(
             name: "PanelUI",
-            dependencies: ["GlassLedger", "SplitRows"]
+            dependencies: ["GlassLedger", "SplitRows"],
+            resources: [.process("Resources")]
         ),
         .target(
             name: "ParakeetRecognizer",
@@ -146,7 +209,8 @@ let package = Package(
         ),
         .target(
             name: "SettingsUI",
-            dependencies: ["GlassLedger"]
+            dependencies: ["GlassLedger"],
+            resources: [.process("Resources")]
         ),
         .target(
             name: "Session"
@@ -165,6 +229,10 @@ let package = Package(
             name: "TrackFileCrashWriter",
             dependencies: ["TrackFile"]
         ),
+        .target(name: "SavePacing"),
+        .testTarget(name: "SavePacingTests", dependencies: ["SavePacing"]),
+        .target(name: "TranscriptFormat"),
+        .testTarget(name: "TranscriptFormatTests", dependencies: ["TranscriptFormat"]),
         .target(
             name: "TranscriptFile"
         ),
@@ -228,6 +296,10 @@ let package = Package(
             dependencies: ["Lifecycle"]
         ),
         .testTarget(
+            name: "CallNotesTests",
+            dependencies: ["CallNotes"]
+        ),
+        .testTarget(
             name: "LiveAudioTests",
             dependencies: ["LiveAudio"]
         ),
@@ -274,7 +346,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SettingsUITests",
-            dependencies: ["SettingsUI", "RenderedText", "BlockingTestWork"]
+            dependencies: ["SettingsUI", "RenderedText"]
         ),
         .testTarget(
             name: "SideTextTests",

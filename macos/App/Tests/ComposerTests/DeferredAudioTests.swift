@@ -4,7 +4,6 @@ import Testing
 
 /// Through the session: text listens before the capture exists when Live text
 /// is on, and after it has been attached when Live text comes on later.
-@MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct DeferredAudioCompositionTests {
 
@@ -64,7 +63,7 @@ struct DeferredAudioCompositionTests {
             if stopDuringBringUp {
                 await starting.waitUntilEntered()
                 await rig.menu.perform(.stop)
-                _ = try await rig.state { $0.phase == .ending }
+                await rig.sessionEnding()
                 starting.release()
                 _ = try await rig.state { $0.phase == .idle }
             } else {

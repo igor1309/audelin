@@ -17,14 +17,15 @@ final class AudelinRecording: Sendable {
     private let delivery: ApplicationDelivery
 
     init(
-        preferences: PreferencesStore, boundary: ComposerBoundary, processes: CoreAudioProcesses,
-        panel: AudelinPanel
+        preferences: PreferencesStore, occupiedCallNames: @escaping @Sendable () throws -> [String],
+        boundary: ComposerBoundary, processes: CoreAudioProcesses,
+        panel: AudelinPanel, cleanupRuns: CleanupRuns, summaries: SummaryCallbacks = .disabled
     ) async throws {
 
         let app = RecordingCallApp()
         self.panel = panel
         let (recording, conditions) = await composeRecordingWithPreferences(
-            preferences: preferences, callApp: app, processes: processes, boundary: boundary, panel: panel
+            preferences: preferences, occupiedCallNames: occupiedCallNames, callApp: app, processes: processes, boundary: boundary, panel: panel, cleanupRuns: cleanupRuns, summaries: summaries
         )
         let inputs = recording
         self.inputs = inputs
@@ -44,6 +45,17 @@ final class AudelinRecording: Sendable {
             await boundary.microphonePermission.request()
             await conditions.refresh()
         }
+    }
+
+    func reserveStorage() async -> Bool {
+        guard await inputs.reserveStorage() else { return false }
+        await conditions.setStorageMoving(true)
+        return true
+    }
+    func releaseStorage() async {
+        await conditions.setStorageMoving(false)
+        await conditions.refresh()
+        await inputs.releaseStorage()
     }
 
     func lifecycle(terminate: @escaping @Sendable () async -> Void) -> LifecycleEffectHandler {
@@ -115,11 +127,5 @@ final class ApplicationRecording: LifecycleRecording {
 func createDefaultCallsFolder(_ folder: URL, default defaultFolder: URL) async {
 
     guard folder.standardizedFileURL == defaultFolder.standardizedFileURL else { return }
-    // Creating a folder blocks on the disk, so it runs outside the cooperative pool.
-    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-        DispatchQueue(label: "audelin.CallsFolderCreation").async {
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            done.resume()
-        }
-    }
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 }

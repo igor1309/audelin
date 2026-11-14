@@ -1,3 +1,4 @@
+import AppKit
 import BlockingTestWork
 import CallAudioProbe
 import CoreAudio
@@ -9,9 +10,9 @@ import Testing
 struct RealCallAudioProbeTests {
     /// Contract test: the live output environment installs its listener and reads the system's default output.
     @Test func realOutputEnvironmentReturnsCurrentDefaultOutputDevice() async throws {
-        let environment = await offPool { OutputEnvironment() }
+        let environment = OutputEnvironment(native: .live, center: NSWorkspace.shared.notificationCenter)
         let device = try #require(await environment.device())
-        let (status, defaultDevice) = await offPool {
+        let (status, defaultDevice) = {
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioHardwarePropertyDefaultOutputDevice,
                 mScope: kAudioObjectPropertyScopeGlobal,
@@ -23,7 +24,7 @@ struct RealCallAudioProbeTests {
                 AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &defaultDevice
             )
             return (status, defaultDevice)
-        }
+        }()
         try #require(status == noErr)
         #expect(defaultDevice != kAudioObjectUnknown)
         #expect(device == defaultDevice)
@@ -31,7 +32,7 @@ struct RealCallAudioProbeTests {
 
     /// Contract test: the production own-process muted Core Audio tap hears its stimulus and tears down.
     @Test func realOwnProcessProbeHearsMutedStimulus() async {
-        let result = await CallAudioProbe().measure()
+        let result = await CallAudioProbe(hardware: .live).measure()
         #expect(result == .heard)
     }
 }

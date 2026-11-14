@@ -1,7 +1,6 @@
+import class SavePacing.SavePacing
 import class CallAppProcesses.CallAppProcesses
 import CallFolder
-import struct CallText.State
-import Dispatch
 import Foundation
 import Session
 import TrackFile
@@ -9,10 +8,6 @@ import TranscriptFile
 
 /// Owns one recording's concrete pieces and exposes their distinct Session roles.
 actor SessionPieces: SessionModels, SessionFolder, SessionProcesses, SessionCallText {
-
-    // Folder creation and synchronous file initializers perform blocking disk I/O.
-    private nonisolated let queue = DispatchSerialQueue(label: "audelin.SessionPieces")
-    nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     enum Failure: Error, Equatable {
 
@@ -33,6 +28,8 @@ actor SessionPieces: SessionModels, SessionFolder, SessionProcesses, SessionCall
 
     let news = AsyncStream<SessionEvent>.makeStream()
     nonisolated let transcriptFailures: TranscriptFailureReport
+    let cleanupRuns: CleanupRuns
+    let summaries: SummaryCallbacks
     let folder: CallFolder
     let folderTitle: String?
     let processes: CallAppProcesses
@@ -44,20 +41,32 @@ actor SessionPieces: SessionModels, SessionFolder, SessionProcesses, SessionCall
     var transcriptFile: (any SessionTranscriptFile)?
     var writing: WritingReader?
     private var readingOutput: NewestText?
+    private var readingSpeakers: AsyncStream<[Int: Int]>.Continuation?
     private var readingObservation: Task<Void, Never>?
 
     // Register before Session begins so its first text state cannot be missed.
-    func readingText() -> AsyncStream<State> {
+    func readingText() -> (text: AsyncStream<CallState>, speakers: AsyncStream<[Int: Int]>) {
 
         let output = NewestText()
         readingOutput = output
-        return output.stream
+        let speakers = AsyncStream<[Int: Int]>.makeStream()
+        readingSpeakers = speakers.continuation
+        return (output.stream, speakers.stream)
+    }
+
+    /// Ends the reading feed once the session has ended, whether or not its transcript opened.
+    func finishReading() {
+
+        readingOutput?.finish()
+        readingSpeakers?.finish()
     }
 
     /// A long call's transcript is saved at most this often, and at once when its text stops.
     static let transcriptInterval: Duration = .seconds(5)
 
-    init(folder: CallFolder, folderTitle: String?, processes: CallAppProcesses, boundary: ComposerBoundary) {
+    init(folder: CallFolder, folderTitle: String?, processes: CallAppProcesses, boundary: ComposerBoundary, cleanupRuns: CleanupRuns, summaries: SummaryCallbacks = .disabled) {
+        self.cleanupRuns = cleanupRuns
+        self.summaries = summaries
         self.folder = folder
         self.folderTitle = folderTitle
         self.processes = processes
@@ -116,13 +125,24 @@ actor SessionPieces: SessionModels, SessionFolder, SessionProcesses, SessionCall
     func openTranscript(in folder: SessionCallFolder) async throws {
 
         let made = try places(in: folder)
-        transcriptFile = try await WritingTranscript(file: TranscriptFile(url: made.transcriptURL), sink: boundary.log)
+        LiveNameBoard.shared.callTrack(made.callURL)
+        let file = try await boundary.transcripts.open(at: made.transcriptURL, sink: boundary.log)
+        transcriptFile = SummaryTranscript(base: file, folder: made.url, callbacks: summaries, cleanup: TranscriptCleanup(
+            recording: CleanupRecording(microphoneURL: made.microphoneURL, callURL: made.callURL),
+            duration: { [microphone = sides[.microphone]!.audio, call = sides[.call]!.audio] in
+                max(microphone.capturedThrough, call.capturedThrough)
+            }, cleaning: boundary.bleedCleaning, hearing: boundary.bleedHearing, sink: boundary.log
+        ), runs: cleanupRuns)
     }
 
     func closeTranscript() async throws {
 
-        defer { news.continuation.finish(); readingOutput?.finish() }
+        defer { news.continuation.finish(); readingOutput?.finish(); readingSpeakers?.finish() }
         await transcriptFile?.close()
+        // The pass ran inside close; the reading model takes each row's speaker after the text.
+        if let places = await transcriptFile?.attributeSpeakers()?.rows, !places.isEmpty {
+            readingSpeakers?.yield(places)
+        }
     }
 
     func start(enabled: Bool) async throws {
@@ -136,9 +156,13 @@ actor SessionPieces: SessionModels, SessionFolder, SessionProcesses, SessionCall
         let text = CallReader(microphone: microphone, call: call)
         let writing = WritingReader(
             callText: WritingCallText(text: text),
-            transcript: transcriptFile.map { TranscriptDestination(file: SignpostedTranscriptFile(base: $0, intervals: boundary.intervals)) },
-            failureReport: transcriptFailures,
-            pause: { [boundary] in try await boundary.time.sleep(SessionPieces.transcriptInterval) }
+            saving: transcriptFile.map {
+                PacedTextSaving(pacing: SavePacing(
+                    saving: TranscriptDestination(file: SignpostedTranscriptFile(base: $0, intervals: boundary.intervals)),
+                    failureReport: transcriptFailures,
+                    pause: { [boundary] in try await boundary.time.sleep(SessionPieces.transcriptInterval) }
+                ))
+            }
         )
         self.writing = writing
         if let output = readingOutput {
@@ -157,6 +181,7 @@ actor SessionPieces: SessionModels, SessionFolder, SessionProcesses, SessionCall
 
     func stop() async throws {
 
+        if let made { await summaries.waiting(made.url) }
         await writing?.stop()
         await readingObservation?.value
     }

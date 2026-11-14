@@ -30,8 +30,18 @@ public struct ReadingState: Equatable, Sendable {
         public var speaker: Speaker
         public var settled: String
         public var pending: String
+        public var name: String?
+        /// Confirmed after the call, not a live guess.
+        public var nameConfirmed: Bool
+        /// The remote speaker's 1-based place among the call's speakers once the call is
+        /// diarized; nil while the far side is one Them.
+        public var remoteSpeaker: Int?
 
-        public init(id: Int, time: String, speaker: Speaker, settled: String = "", pending: String = "") {
+        public init(id: Int, time: String, speaker: Speaker, settled: String = "", pending: String = "", name: String? = nil, nameConfirmed: Bool = false, remoteSpeaker: Int? = nil) {
+
+            self.name = name
+            self.nameConfirmed = nameConfirmed
+            self.remoteSpeaker = remoteSpeaker
 
             self.id = id
             self.time = time
@@ -205,23 +215,9 @@ public struct ReadingState: Equatable, Sendable {
         }
     }
 
-    // Per-reduction work stays local to the value and does not affect what the panel observes.
-    public struct Work: Sendable {
-
-        public var entryOrderComparisons = 0
-        public var rowsBuilt = 0
-
-        public init(entryOrderComparisons: Int = 0, rowsBuilt: Int = 0) {
-
-            self.entryOrderComparisons = entryOrderComparisons
-            self.rowsBuilt = rowsBuilt
-        }
-    }
-
     public var rendered = Rendered()
-    public var work = Work()
 
-    // Rendering indexes and work counts are derived bookkeeping, not panel state.
+    // Rendering indexes are derived bookkeeping, not panel state.
     public static func == (lhs: Self, rhs: Self) -> Bool {
 
         // More text being final is a change, and finding that out need not walk the call.
@@ -238,7 +234,7 @@ public struct ReadingState: Equatable, Sendable {
         problems: [ReadingProblem] = [], status: ReadingTextUpdate.Status = .off,
         anchors: SplitDictionary<ReadingTextUpdate.Entry.ID, Anchor> = [:], nextDisplayID: Int = 0,
         text: SplitDictionary<ReadingTextUpdate.Entry.ID, ReadingTextUpdate.Entry> = [:],
-        lines: Lines = .init(), rendered: Rendered = .init(), work: Work = .init()
+        lines: Lines = .init(), rendered: Rendered = .init()
     ) {
 
         self.scrollAcknowledgement = scrollAcknowledgement
@@ -252,6 +248,5 @@ public struct ReadingState: Equatable, Sendable {
         self.text = text
         self.lines = lines
         self.rendered = rendered
-        self.work = work
     }
 }

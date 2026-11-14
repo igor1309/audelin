@@ -96,7 +96,7 @@ struct CallAudioProbeTests {
         timeout.fireEvenIfCancelled()
         rig.emit([0.001])
         rig.player.complete()
-        // A second measurement is a queue barrier for the late work above.
+        // Late callbacks finish their work, or find the measurement over, before they return.
         #expect(await rig.measure(samples: [0]) == .silent)
         #expect(Array(rig.events.prefix(completed.count)) == completed)
         #expect(rig.events.filter { $0 == "destroy tap" }.count == 2)
@@ -148,7 +148,7 @@ final class ProbeRig: Sendable {
     func record(_ event: String) { calls.withLock { $0.append(event) } }
     func status(_ event: String) -> OSStatus { record(event); return failure == event ? -1 : noErr }
 
-    var probe: CallAudioProbe { CallAudioProbe(native: native, makePlayer: { [player] in player }, schedule: clock.schedule) }
+    var probe: CallAudioProbe { CallAudioProbe(hardware: .init(native: native, makePlayer: { [player] in player }, schedule: clock.schedule)) }
 
     var native: ProbeNative {
         ProbeNative(defaultOutput: { [self] in

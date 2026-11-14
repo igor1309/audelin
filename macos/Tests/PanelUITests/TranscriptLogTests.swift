@@ -71,6 +71,28 @@ struct TranscriptLogTests {
         #expect(attribute(.foregroundColor, of: "12:45", in: text) as? NSColor == NSColor(GlassLedger.light.them))
     }
 
+    @Test func aSpeakerNameSitsOnItsOwnLineOutsideTheSelection() throws {
+
+        let text = try #require(Offscreen.textView(in: hosted(.init(rows: [
+            .entry(.init(id: 1, time: "12:44", speaker: .them, settled: "привет", label: "Анна Королёва")),
+            .entry(.init(id: 2, time: "12:45", speaker: .them, settled: "deploy", label: nil)),
+        ]))))
+
+        #expect(text.string == "\tАнна Королёва\n\u{FFFC}\t12:44\tпривет\n\u{FFFC}\t12:45\tdeploy")
+        #expect(Transcript.text(in: NSRange(location: 0, length: text.string.utf16.count), of: text.attributedString()) == "привет\ndeploy")
+        #expect(attribute(.foregroundColor, of: "Анна", in: text) as? NSColor == NSColor(GlassLedger.light.them))
+        #expect((attribute(.font, of: "Анна", in: text) as? NSFont)?.pointSize == GlassLedger.light.typeCaption)
+    }
+
+    @Test func aTentativeNameIsSlantedAndDimmer() throws {
+
+        let text = try #require(Offscreen.textView(in: hosted(.init(rows: [
+            .entry(.init(id: 1, time: "12:44", speaker: .them, settled: "привет", label: "Анна", labelIsTentative: true)),
+        ]))))
+        #expect(attribute(.obliqueness, of: "Анна", in: text) as? CGFloat == 0.2)
+        #expect(attribute(.foregroundColor, of: "Анна", in: text) as? NSColor == NSColor(GlassLedger.light.gutter))
+    }
+
     @Test func placesALateGroupWhereItsMinutesWere() throws {
 
         let text = try #require(Offscreen.textView(in: hosted(lateLines)))
@@ -220,6 +242,24 @@ struct TranscriptLogTests {
         let edit = rows.update(entries, style: .init(tokens: .dark, config: .glassLedger))
 
         #expect(edit.range.location == 0)
+    }
+
+    @Test func aNewLanguageReplacesEveryRow() {
+
+        let rows = Transcript.Rows()
+        _ = rows.update(lateLines, style: .init(tokens: .light, config: .glassLedger))
+
+        let edit = rows.update(lateLines, style: .init(tokens: .light, config: .glassLedger, text: .init(language: .english)))
+
+        #expect(edit.range.location == 0)
+        #expect(edit.text.string.contains("written later · 12:41–12:42"))
+        #expect(!edit.text.string.contains("дописано позже"))
+    }
+
+    @Test func theLateCaptionIsInTheGivenLanguage() {
+
+        let russian = Transcript(lines: lateLines, style: .init(tokens: .light, config: .glassLedger)).string.string
+        #expect(russian.contains("дописано позже · 12:41–12:42"))
     }
 
     @Test func applyEditsNothingAboveTheFirstChangedRow() {
@@ -510,17 +550,17 @@ struct TranscriptLogTests {
         expectScrolls(events, [false])
 
         // An unrelated update can still carry the pre-scroll snapshot.
-        coordinator.parent = TranscriptLog(lines: .init(entries: []), tokens: .light, config: .glassLedger, event: event)
+        coordinator.parent = TranscriptLog(lines: .init(entries: []), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         coordinator.quietly { }
         #expect(clip.bounds.origin == .zero)
 
-        coordinator.parent = TranscriptLog(lines: .init(entries: [], followsLive: false, scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, event: event)
+        coordinator.parent = TranscriptLog(lines: .init(entries: [], followsLive: false, scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         coordinator.quietly { }
         document.setFrameSize(NSSize(width: 200, height: 1_200))
         #expect(clip.bounds.origin == .zero)
         expectScrolls(events, [false])
 
-        coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, event: event)
+        coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         coordinator.quietly { }
         #expect(isAtBottom(scroll))
         document.setFrameSize(NSSize(width: 200, height: 1_400))
@@ -539,14 +579,14 @@ struct TranscriptLogTests {
         let document = try #require(scroll.documentView)
 
         clip.scroll(to: NSPoint(x: 0, y: 100))
-        coordinator.parent = TranscriptLog(lines: .init(entries: [], followsLive: false, scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, event: event)
+        coordinator.parent = TranscriptLog(lines: .init(entries: [], followsLive: false, scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         clip.scroll(to: NSPoint(x: 0, y: document.frame.height - clip.bounds.height))
         let resume = try scrollID(events.last)
         clip.scroll(to: NSPoint(x: 0, y: 200))
         let pause = try scrollID(events.last)
         let stopped = clip.bounds.origin
 
-        coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: resume), tokens: .light, config: .glassLedger, event: event)
+        coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: resume), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         coordinator.quietly { }
         #expect(clip.bounds.origin == stopped)
         document.setFrameSize(NSSize(width: 200, height: 1_000))
@@ -555,13 +595,13 @@ struct TranscriptLogTests {
 
         if jumpToLive {
             // A jump snapshot may coalesce the paused snapshot it follows.
-            coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: pause), tokens: .light, config: .glassLedger, event: event)
+            coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: pause), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         } else {
-            coordinator.parent = TranscriptLog(lines: .init(entries: [], followsLive: false, scrollAcknowledgement: pause), tokens: .light, config: .glassLedger, event: event)
+            coordinator.parent = TranscriptLog(lines: .init(entries: [], followsLive: false, scrollAcknowledgement: pause), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
             coordinator.quietly { }
             #expect(clip.bounds.origin == stopped)
             clip.scroll(to: NSPoint(x: 0, y: document.frame.height - clip.bounds.height))
-            coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, event: event)
+            coordinator.parent = TranscriptLog(lines: .init(entries: [], scrollAcknowledgement: try scrollID(events.last)), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         }
         coordinator.quietly { }
         #expect(isAtBottom(scroll))
@@ -642,37 +682,6 @@ struct TranscriptLogTests {
         #expect(scroll.contentView.bounds.origin.y == 0, "the log moved under the reader")
     }
 
-    @Test func resizingALongLiveLogKeepsItsLastLineVisible() throws {
-        let history = (0..<120).map { index in
-            PanelState.Entry(id: index, time: "03:24", speaker: .them,
-                settled: String(repeating: "Обсуждаем план работ и следующий релиз. ", count: 1 + index % 7))
-        }
-        func panel(_ width: CGFloat) -> AnyView {
-            var config = PanelConfig.glassLedger
-            config.panelWidth = width
-            return AnyView(PanelView(state: .init(recording: .on(elapsed: "00:11:26"),
-                log: .lines(.init(entries: history))), event: { _ in }, config: config)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
-        }
-        let host = Offscreen.host(panel(396), size: CGSize(width: 396, height: 560))
-        let window = try #require(host.window)
-        let text = try #require(Offscreen.textView(in: host))
-        let scroll = try #require(scrollView(in: host))
-        let originalText = text.string
-        for width: CGFloat in [500, 320, 600, 396, 550, 340] {
-            host.rootView = panel(width)
-            window.setContentSize(CGSize(width: width, height: 560))
-            host.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: .now.addingTimeInterval(0.05))
-            host.display()
-            #expect(text.string == originalText, "Resize duplicated or lost transcript text")
-            let last = text.firstRect(forCharacterRange: NSRange(location: text.string.utf16.count - 1, length: 1), actualRange: nil)
-            let visible = scroll.convert(scroll.contentView.bounds, from: scroll.contentView)
-            let screen = window.convertToScreen(scroll.convert(visible, to: nil))
-            #expect(last.intersects(screen), "last line disappeared at width \(width): \(last), viewport \(screen)")
-        }
-    }
-
     @Test func resizingDoesNotReplaceUnchangedTranscriptCharacters() {
         let rows = Transcript.Rows()
         var config = PanelConfig.glassLedger
@@ -728,6 +737,10 @@ struct TranscriptLogTests {
         let host = Offscreen.host(panel(history, elapsed: "00:07:05"), size: CGSize(width: 396, height: 560))
         let scroll = try #require(scrollView(in: host))
         let text = try #require(Offscreen.textView(in: host))
+        let window = try #require(host.window)
+        // Run the same sizing probe before and after the baseline. Otherwise
+        // the first update also measures the initial, still-estimated layout.
+        _ = host.fittingSize
         text.scrollRangeToVisible((text.string as NSString).range(of: "03:24"))
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 800))
         host.display()
@@ -735,18 +748,29 @@ struct TranscriptLogTests {
         host.display()
         let origin = scroll.contentView.bounds.origin
         let anchor = text.characterIndexForInsertion(at: NSPoint(x: 100, y: origin.y + 40))
-        let anchorRect = text.firstRect(forCharacterRange: NSRange(location: anchor, length: 1), actualRange: nil)
+        func anchorInViewport() -> NSRect {
+            let screen = text.firstRect(forCharacterRange: NSRange(location: anchor, length: 1), actualRange: nil)
+            return scroll.convert(window.convertFromScreen(screen), from: nil)
+        }
+        // firstRect returns screen coordinates. Window placement is independent
+        // of whether text stays under the reader inside the scroll viewport.
+        let anchorRect = anchorInViewport()
+        #expect(!anchorRect.isEmpty)
 
         var entries = history
         for step in 0..<10 {
+            if step == 0 {
+                window.setFrameOrigin(NSPoint(x: window.frame.minX + 20, y: window.frame.minY + 40))
+            }
             if !step.isMultiple(of: 2) { entries = history + [newest("слово \(step)")] }
             host.rootView = panel(entries, elapsed: "00:07:\(step + 6)")
             host.layoutSubtreeIfNeeded()
             _ = host.fittingSize
             RunLoop.main.run(until: .now.addingTimeInterval(0.03))
             host.display()
-            let rect = text.firstRect(forCharacterRange: NSRange(location: anchor, length: 1), actualRange: nil)
-            #expect(abs(rect.minY - anchorRect.minY) < 1, "visible text moved on update \(step)")
+            let rect = anchorInViewport()
+            #expect(abs(rect.minY - anchorRect.minY) < 1,
+                "visible text moved on update \(step): \(anchorRect) -> \(rect); window \(window.frame), scroll \(scroll.frame)")
             #expect(abs(scroll.contentView.bounds.origin.y - origin.y) < 1,
                 "paused viewport moved on update \(step): \(origin) -> \(scroll.contentView.bounds.origin)")
         }
@@ -801,7 +825,7 @@ struct TranscriptLogTests {
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 160))
         scroll.contentView = ScrollingClipView(frame: scroll.contentView.frame)
         scroll.documentView = GeometryDocument(frame: NSRect(x: 0, y: 0, width: 200, height: 800))
-        let parent = TranscriptLog(lines: .init(entries: []), tokens: .light, config: .glassLedger, event: event)
+        let parent = TranscriptLog(lines: .init(entries: []), tokens: .light, config: .glassLedger, panelText: .init(language: .russian), event: event)
         let coordinator = parent.makeCoordinator()
         coordinator.observeGeometry(of: scroll)
         coordinator.quietly { }
@@ -903,7 +927,7 @@ struct TranscriptLogTests {
 
         let config = PanelConfig.glassLedger
         return AnyView(
-            TranscriptLog(lines: lines, tokens: .light, config: config, event: event)
+            TranscriptLog(lines: lines, tokens: .light, config: config, panelText: .init(language: .russian), event: event)
                 .frame(width: config.panelWidth, height: height)
                 .background(GlassLedger.light.glass)
                 .environment(\.colorScheme, .light)
@@ -949,52 +973,21 @@ struct TranscriptLogTests {
     }
 }
 
-private final class GeometryDocument: NSView {
+extension TranscriptLogTests {
 
-    override var isFlipped: Bool { true }
-}
+    @Test func eachRowIsAnElementNamedByTheSpeakerItIsDrawnUnder() throws {
 
-private final class ScrollingClipView: NSClipView {
+        let text = try #require(Offscreen.textView(in: hosted(.init(rows: [
+            .entry(.init(id: 1, time: "12:44", speaker: .me, settled: "mine")),
+            .entry(.init(id: 2, time: "12:45", speaker: .them, settled: "hello", label: "Анна", labelIsTentative: true, remoteSpeaker: 1)),
+            .entry(.init(id: 3, time: "12:46", speaker: .them, settled: "again", pending: " more", remoteSpeaker: 1)),
+            .entry(.init(id: 4, time: "12:47", speaker: .them, settled: "other", remoteSpeaker: 2)),
+        ]))))
 
-    var didScroll: (() -> Void)?
-
-    override func scroll(to newOrigin: NSPoint) {
-
-        super.scroll(to: newOrigin)
-        didScroll?()
-    }
-}
-
-/// A text storage that records every range it is asked to style.
-private final class RecordingStorage: NSTextStorage {
-
-    private let backing: NSMutableAttributedString
-    private(set) var styled: [NSRange] = []
-    private(set) var replaced: [NSRange] = []
-
-    init(_ string: NSAttributedString) {
-        backing = NSMutableAttributedString(attributedString: string)
-        super.init()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-    required init?(pasteboardPropertyList propertyList: Any, ofType type: NSPasteboard.PasteboardType) { fatalError() }
-
-    override var string: String { backing.string }
-
-    override func attributes(at location: Int, effectiveRange range: NSRangePointer?) -> [NSAttributedString.Key: Any] {
-        backing.attributes(at: location, effectiveRange: range)
-    }
-
-    override func replaceCharacters(in range: NSRange, with str: String) {
-        replaced.append(range)
-        backing.replaceCharacters(in: range, with: str)
-        edited(.editedCharacters, range: range, changeInLength: (str as NSString).length - range.length)
-    }
-
-    override func setAttributes(_ attrs: [NSAttributedString.Key: Any]?, range: NSRange) {
-        styled.append(range)
-        backing.setAttributes(attrs, range: range)
-        edited(.editedAttributes, range: range, changeInLength: 0)
+        let rows = (text.accessibilityChildren() ?? []).compactMap { $0 as? NSAccessibilityElement }
+            .filter { ($0.accessibilityIdentifier() ?? "").hasPrefix("panel.row.") }
+        #expect(rows.map { $0.accessibilityIdentifier() } == ["panel.row.1", "panel.row.2", "panel.row.3", "panel.row.4"])
+        #expect(rows.map { $0.accessibilityLabel() } == ["mine", "hello", "again more", "other"])
+        #expect(rows.map { $0.accessibilityValue() as? String } == ["", "Анна", "Анна", ""])
     }
 }

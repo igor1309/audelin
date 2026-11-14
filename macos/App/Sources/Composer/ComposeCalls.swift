@@ -2,31 +2,39 @@ import Calls
 import Foundation
 import Recordings
 
-/// All disk work, including audio header reads, stays on this dedicated queue.
-final class ComposeCalls: RecordingsCalls, Sendable {
+/// Disk work, including audio header reads, runs one operation at a time.
+actor ComposeCalls: RecordingsCalls {
     private let disk: Calls
-    private let queue = DispatchQueue(label: "audelin.calls")
 
     init(disk: Calls) { self.disk = disk }
 
     func list() async throws -> [RecordedCall] {
-        try await perform { disk in
+        try perform { disk in
             try disk.list().map { .init(id: $0.id, title: $0.title, start: $0.start, duration: $0.duration) }
         }
     }
 
-    func rename(id: String, title: String) async throws { try await perform { try $0.rename(id: id, title: title) } }
-    func delete(id: String) async throws { try await perform { try $0.delete(id: id) } }
-    func location(id: String) async throws -> URL { try await perform { try $0.location(id: id) } }
-
-    private func perform<Value: Sendable>(_ work: @escaping @Sendable (Calls) throws -> Value) async throws -> Value {
-        try await withCheckedThrowingContinuation { done in
-            queue.async { [disk] in done.resume(with: Result { try work(disk) }) }
+    func rename(id: String, title: String) async throws { try perform { try $0.rename(id: id, title: title) } }
+    func delete(id: String) async throws { try perform { try $0.delete(id: id) } }
+    func prepareMove(to destination: URL) async throws -> [MoveCall] {
+        try perform { disk in
+            let calls = try disk.list()
+            if let first = calls.first {
+                let source = try disk.location(id: first.id).deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+                if source.path == destination.resolvingSymlinksInPath().standardizedFileURL.path { return [] }
+            }
+            return try calls.map { .init(id: $0.id, title: $0.title, bytes: try disk.bytes(id: $0.id)) }
         }
+    }
+    func move(id: String, to destination: URL) async throws -> Int64 { try perform { try $0.move(id: id, to: destination) } }
+    func location(id: String) async throws -> URL { try perform { try $0.location(id: id) } }
+
+    private func perform<Value: Sendable>(_ work: (Calls) throws -> Value) throws -> Value {
+        try work(disk)
     }
 }
 
-/// A failed mutation can leave a partially deleted folder; refresh the disk view
+/// The disk can differ from the list after a failed mutation; refresh the disk view
 /// after delivering the failure, retaining its reason until the next action.
 func handleRecordingsEffect(_ handler: RecordingsEffectHandler, _ effect: RecordingsEffect) -> AsyncStream<RecordingsEvent> {
     AsyncStream { output in
